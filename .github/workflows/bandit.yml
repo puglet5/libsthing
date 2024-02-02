@@ -1,0 +1,13 @@
+name: bandit
+on: [push, pull_request]
+
+jobs:
+  bandit:
+    permissions:
+      contents: read
+
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Bandit Check
+        uses: jpetrucciani/bandit-check@main

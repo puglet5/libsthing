@@ -1,0 +1,35 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+pandas = "*"
+numpy = "*"
+libsthing = {file = ".", editable = true}
+coloredlogs = "*"
+dearpygui = "*"
+scipy = "*"
+scikit-learn = "*"
+chardet = "*"
+lmfit = "*"
+findpeaks = "*"
+pyarrow = "*"
+
+[dev-packages]
+black = "*"
+bandit = "*"
+pandas-stubs = "*"
+setuptools = "*"
+ipykernel = "*"
+nuitka = "*"
+memory-profiler = "*"
+typing-extensions = "*"
+pylint = "*"
+matplotlib = "*"
+scrapy = "*"
+periodictable = "*"
+bs4 = "*"
+
+[requires]
+python_version = "3.11"

@@ -1,0 +1,7 @@
+[MESSAGES CONTROL]
+disable=
+    missing-docstring,
+    no-member,
+    wildcard-import,
+    broad-exception-caught
+

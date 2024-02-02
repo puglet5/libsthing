@@ -1,0 +1,37 @@
+name: nuitka build
+
+on:
+   release:
+      types: [published]
+
+jobs:
+   build:
+      runs-on: ${{ matrix.os }}
+      strategy:
+         fail-fast: false
+         matrix:
+            os: ["ubuntu-latest", "windows-latest"]
+
+      steps:
+         - uses: actions/checkout@v3
+         - uses: actions/setup-python@v4
+           with:
+              python-version: 3.11
+              cache: "pipenv"
+
+         - run: |
+              pip install pipenv
+              pipenv install -d
+
+         - uses: Nuitka/Nuitka-Action@main
+           with:
+              nuitka-version: main
+              script-name: ./src/main.py
+              onefile: true
+
+         - uses: actions/upload-artifact@v3
+           with:
+              path: |
+                 build/*.exe
+                 build/*.bin
+                 build/*.src/**/*
