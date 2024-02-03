@@ -1,11 +1,11 @@
 import logging
 import os
 import threading
+import time
 from dataclasses import dataclass, field
 from functools import wraps
-from io import BytesIO
+from itertools import chain
 from pathlib import Path
-from time import time
 from typing import Callable, Generator, ParamSpec, TypeVar
 
 import coloredlogs
@@ -13,7 +13,7 @@ import dearpygui.dearpygui as dpg
 import numpy as np
 import numpy.typing as npt
 
-from src.filetypes import convert_to_csv
+from src.filetypes import spec_to_numpy
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 logging.basicConfig(filename=Path(ROOT_DIR, "log/main.log"), filemode="a")
@@ -79,16 +79,30 @@ def progress_bar(
     return _wrapper  # type:ignore
 
 
-@dataclass(slots=True)
+def flatten(iter: list):
+    return list(chain.from_iterable(iter))
+
+
+@dataclass(slots=True, repr=False, eq=False)
 class Spectrum:
     filepath: Path
-    spectral_data: npt.NDArray[np.float64] | None = field(init=False, default=None)
+    spectral_data: npt.NDArray[np.float_] | None = field(init=False, default=None)
 
     def __post_init__(self):
-        with open(self.filepath, "rb") as fh:
-            buf = BytesIO(fh.read())
-            csv = convert_to_csv(buf, self.filepath)
-            if csv is None:
-                raise ValueError
+        self.spectral_data = spec_to_numpy(self.filepath)
 
-            self.spectral_data = np.loadtxt(csv, delimiter=",")
+
+class LIBSSeries:
+    name: str
+    folder: Path
+    spectra: list[Spectrum] | list[list[Spectrum]] = field(
+        init=False, default_factory=list
+    )
+
+    def __post_init__(self): ...
+
+    def average_all(self) -> npt.NDArray[np.float_]:
+        data = np.array([s.spectral_data for s in flatten(self.spectra)])
+        return data.mean(axis=0)
+
+    def average_per_sample(self) -> npt.NDArray[np.float_]: ...

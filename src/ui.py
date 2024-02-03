@@ -48,7 +48,8 @@ class UI:
         dpg.stop_dearpygui()
         dpg.destroy_context()
 
-    def setup_dev(self): ...
+    def setup_dev(self):
+        pass
 
     def setup_themes(self):
         with dpg.theme() as self.global_theme:
@@ -87,7 +88,8 @@ class UI:
             dpg.stop_dearpygui()
             dpg.destroy_context()
 
-    def bind_item_handlers(self): ...
+    def bind_item_handlers(self):
+        pass
 
     def setup_layout(self):
         with dpg.window(
@@ -99,13 +101,7 @@ class UI:
         ):
             with dpg.menu_bar(tag="menu_bar"):
                 with dpg.menu(label="File"):
-                    dpg.add_menu_item(label="Open new image", shortcut="(Ctrl+O)")
-                    dpg.add_menu_item(
-                        label="Open project directory", shortcut="(Ctrl+Shift+O)"
-                    )
-                    dpg.add_menu_item(
-                        label="Open latest image", shortcut="(Ctrl+Shift+I)"
-                    )
+                    dpg.add_menu_item(label="Open new project", shortcut="(Ctrl+O)")
                     dpg.add_menu_item(label="Save", shortcut="(Ctrl+S)")
                     dpg.add_menu_item(label="Save As", shortcut="(Ctrl+Shift+S)")
                     dpg.add_menu_item(label="Quit", shortcut="(Ctrl+Q)")
@@ -127,7 +123,7 @@ class UI:
                     dpg.add_menu_item(
                         label="Toggle Fullscreen",
                         shortcut="(Win+F)",
-                        callback=lambda: dpg.toggle_viewport_fullscreen(),
+                        callback=lambda _s, _d: dpg.toggle_viewport_fullscreen(),
                     )
                 with dpg.menu(label="Tools"):
                     with dpg.menu(label="Developer"):
@@ -176,7 +172,6 @@ class UI:
                         menubar=True,
                         no_scrollbar=True,
                     ):
-                        ...
                         with dpg.menu_bar():
                             with dpg.menu(label="Project", enabled=False):
                                 pass
@@ -187,7 +182,6 @@ class UI:
                         menubar=True,
                         no_scrollbar=True,
                     ):
-                        ...
                         with dpg.menu_bar():
                             with dpg.menu(label="Plots", enabled=False):
                                 pass
@@ -237,7 +231,7 @@ class UI:
             height=600,
             tag="project_directory_picker",
         ):
-            ...
+            pass
 
         with dpg.window(
             label="Settings",
@@ -250,7 +244,7 @@ class UI:
             height=400,
             no_resize=True,
         ):
-            ...
+            pass
 
         w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
         with dpg.window(
@@ -267,7 +261,7 @@ class UI:
         ):
             dpg.add_loading_indicator(radius=20)
             dpg.add_button(
-                label="Loading hyperspectral data...",
+                label="Loading hyperspectral datapass",
                 indent=30,
                 tag="loading_indicator_message",
             )

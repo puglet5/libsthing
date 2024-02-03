@@ -27,9 +27,9 @@ memory-profiler = "*"
 typing-extensions = "*"
 pylint = "*"
 matplotlib = "*"
-scrapy = "*"
 periodictable = "*"
 bs4 = "*"
+pyarrow-stubs = "*"
 
 [requires]
 python_version = "3.11"

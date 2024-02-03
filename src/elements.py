@@ -245,18 +245,16 @@ ELEMENT_NAMES = [
 
 
 def element_z_to_symbol(z: int) -> str | None:
-    if z == 0:
-        return ""
-    elif z <= 118:
-        return ELEMENT_SYMBOLS[z - 1]
-    else:
+    if z > 118:
         logger.error("Error: Z out of range")
         return None
+
+    return ELEMENT_SYMBOLS[z - 1]
 
 
 def element_z_to_name(z) -> str | None:
-    if z <= 118:
-        return ELEMENT_NAMES[z - 1]
-    else:
+    if z > 118:
         logger.error("Error: Z out of range")
         return None
+
+    return ELEMENT_NAMES[z - 1]
