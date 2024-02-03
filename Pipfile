@@ -15,6 +15,7 @@ chardet = "*"
 lmfit = "*"
 findpeaks = "*"
 pyarrow = "*"
+attrs = "*"
 
 [dev-packages]
 black = "*"

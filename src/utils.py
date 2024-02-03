@@ -2,16 +2,17 @@ import logging
 import os
 import threading
 import time
-from dataclasses import dataclass, field
-from functools import wraps
+from functools import cached_property, wraps
 from itertools import chain
+from multiprocessing import Pool, cpu_count
 from pathlib import Path
-from typing import Callable, Generator, ParamSpec, TypeVar
+from typing import Callable, Generator, Iterable, ParamSpec, TypeVar
 
 import coloredlogs
 import dearpygui.dearpygui as dpg
 import numpy as np
 import numpy.typing as npt
+from attr import define, field
 
 from src.filetypes import spec_to_numpy
 
@@ -19,6 +20,7 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 logging.basicConfig(filename=Path(ROOT_DIR, "log/main.log"), filemode="a")
 coloredlogs.install(level="DEBUG")
 logger = logging.getLogger(__name__)
+CPU_COUNT = cpu_count()
 
 T = TypeVar("T")
 P = ParamSpec("P")
@@ -80,28 +82,42 @@ def progress_bar(
 
 
 def flatten(iter: list):
+    if not isinstance(iter[0], Iterable):
+        return iter
     return list(chain.from_iterable(iter))
 
 
-@dataclass(slots=True, repr=False, eq=False)
+@define(repr=False, eq=False)
 class Spectrum:
     filepath: Path
     spectral_data: npt.NDArray[np.float_] | None = field(init=False, default=None)
 
-    def __post_init__(self):
+    def __attrs_post_init__(self):
         self.spectral_data = spec_to_numpy(self.filepath)
 
 
+@define(repr=False, eq=False)
 class LIBSSeries:
     name: str
     folder: Path
-    spectra: list[Spectrum] | list[list[Spectrum]] = field(
-        init=False, default_factory=list
-    )
+    spectra: list[Spectrum] | list[list[Spectrum]] = field(init=False, factory=list)
 
-    def __post_init__(self): ...
+    def __attrs_post_init__(self):
+        libs_files = [
+            Path(os.path.join(dp, f))
+            for dp, _, filenames in os.walk(self.folder)
+            for f in filenames
+            if os.path.splitext(f)[1] == ".spec"
+        ]
 
-    def average_all(self) -> npt.NDArray[np.float_]:
+        pool = Pool(processes=CPU_COUNT)
+        self.spectra = pool.map(Spectrum, libs_files)
+
+        pool.terminate()
+        pool.join()
+
+    @cached_property
+    def averaged(self) -> npt.NDArray[np.float_]:
         data = np.array([s.spectral_data for s in flatten(self.spectra)])
         return data.mean(axis=0)
 

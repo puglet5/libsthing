@@ -1,8 +1,8 @@
 import logging
-from dataclasses import dataclass, field
 from typing import Literal
 
 import dearpygui.dearpygui as dpg
+from attrs import define, field
 
 from src.utils import loading_indicator, log_exec_time
 
@@ -13,14 +13,14 @@ TOOLTIP_DELAY_SEC = 0.1
 LABEL_PAD = 23
 
 
-@dataclass(slots=True)
+@define(repr=False, eq=False)
 class UI:
     window: Literal["primary"] = field(init=False, default="primary")
     sidebar_width: Literal[350] = 350
     global_theme: int = field(init=False, default=0)
     button_theme: int = field(init=False, default=0)
 
-    def __post_init__(self):
+    def __attrs_post_init__(self):
         dpg.create_context()
         dpg.create_viewport(title="hsistat", width=1920, height=1080, vsync=True)
         dpg.configure_app(wait_for_input=False)
