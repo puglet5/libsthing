@@ -16,6 +16,7 @@ lmfit = "*"
 findpeaks = "*"
 pyarrow = "*"
 attrs = "*"
+natsort = "*"
 
 [dev-packages]
 black = "*"

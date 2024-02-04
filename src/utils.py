@@ -1,8 +1,9 @@
 import logging
 import os
+import re
 import threading
 import time
-from functools import cached_property, wraps
+from functools import cached_property, lru_cache, partial, wraps
 from itertools import chain
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
@@ -13,6 +14,7 @@ import dearpygui.dearpygui as dpg
 import numpy as np
 import numpy.typing as npt
 from attr import define, field
+from natsort import natsorted
 
 from src.filetypes import spec_to_numpy
 
@@ -20,6 +22,7 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 logging.basicConfig(filename=Path(ROOT_DIR, "log/main.log"), filemode="a")
 coloredlogs.install(level="DEBUG")
 logger = logging.getLogger(__name__)
+
 CPU_COUNT = cpu_count()
 
 T = TypeVar("T")
@@ -87,38 +90,86 @@ def flatten(iter: list):
     return list(chain.from_iterable(iter))
 
 
-@define(repr=False, eq=False)
+@define
 class Spectrum:
     filepath: Path
-    spectral_data: npt.NDArray[np.float_] | None = field(init=False, default=None)
+    spectral_data: npt.NDArray[np.float_] | None = field(
+        init=False, default=None, repr=False
+    )
 
     def __attrs_post_init__(self):
         self.spectral_data = spec_to_numpy(self.filepath)
 
 
-@define(repr=False, eq=False)
-class LIBSSeries:
-    name: str
-    folder: Path
-    spectra: list[Spectrum] | list[list[Spectrum]] = field(init=False, factory=list)
+@define
+class Sample:
+    directory: Path
+    name: str = field(init=False)
+    spectra: list[Spectrum] = field(init=False, factory=list)
 
     def __attrs_post_init__(self):
-        libs_files = [
-            Path(os.path.join(dp, f))
-            for dp, _, filenames in os.walk(self.folder)
-            for f in filenames
-            if os.path.splitext(f)[1] == ".spec"
-        ]
+        specra_files = natsorted(self.directory.rglob("*.spec"))
 
-        pool = Pool(processes=CPU_COUNT)
-        self.spectra = pool.map(Spectrum, libs_files)
+        self.spectra = [Spectrum(f) for f in specra_files]
+        self.name = self.directory.name
 
-        pool.terminate()
-        pool.join()
+    def averaged(self, drop_first: int = 0) -> npt.NDArray[np.float_]:
+        data = np.array([s.spectral_data for s in self.spectra[drop_first:]])
+        return data.mean(axis=0)
+
+
+@define
+class Series:
+    directory: Path
+    name: str | None = field(default=None)
+    samples: list[Sample] = field(init=False, factory=list)
+
+    def __attrs_post_init__(self):
+        child_dirs = natsorted(d for d in self.directory.iterdir() if d.is_dir())
+        if not child_dirs:
+            self.samples = [Sample(self.directory)]
+        else:
+            self.samples = [Sample(d) for d in child_dirs]
+
+        if self.name is None:
+            self.name = "_".join([self.directory.parent.name, self.directory.name])
 
     @cached_property
     def averaged(self) -> npt.NDArray[np.float_]:
-        data = np.array([s.spectral_data for s in flatten(self.spectra)])
+        spectra: list[Spectrum] = flatten([s.spectra for s in self.samples])
+        data = np.array([s.spectral_data for s in spectra])
         return data.mean(axis=0)
 
-    def average_per_sample(self) -> npt.NDArray[np.float_]: ...
+
+@define
+class Project:
+    directory: Path
+    series_dirs: list[Path] = field(init=False, factory=list)
+    series: list[Series] = field(init=False, factory=list)
+
+    def __attrs_post_init__(self):
+        self.validate_directory()
+        self.load_series()
+
+    def validate_directory(self):
+        if not self.directory.exists():
+            raise ValueError
+
+        possible_series_dirs = natsorted(
+            f for f in self.directory.iterdir() if f.is_dir()
+        )
+
+        if not any(possible_series_dirs):
+            raise ValueError
+
+        for directory in possible_series_dirs:
+            if not directory.name.isnumeric():
+                raise ValueError
+
+        self.series_dirs = possible_series_dirs
+
+    @partial(loading_indicator, message="Loading series...")
+    @log_exec_time
+    def load_series(self):
+        for d in self.series_dirs:
+            self.series.append(Series(d))

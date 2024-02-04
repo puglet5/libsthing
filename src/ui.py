@@ -1,10 +1,11 @@
 import logging
+from pathlib import Path
 from typing import Literal
 
 import dearpygui.dearpygui as dpg
 from attrs import define, field
 
-from src.utils import loading_indicator, log_exec_time
+from src.utils import Project, loading_indicator, log_exec_time
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,7 @@ LABEL_PAD = 23
 
 @define(repr=False, eq=False)
 class UI:
+    project: Project = field(init=False)
     window: Literal["primary"] = field(init=False, default="primary")
     sidebar_width: Literal[350] = 350
     global_theme: int = field(init=False, default=0)
@@ -90,6 +92,30 @@ class UI:
 
     def bind_item_handlers(self):
         pass
+
+    def setup_project(self):
+        if hasattr(self, "project"):
+            del self.project
+
+        dpg.hide_item("project_directory_error_message")
+
+        try:
+            project_dir = Path(dpg.get_value("project_directory"))
+            self.project = Project(project_dir)
+        except ValueError:
+            dpg.show_item("project_directory_error_message")
+            return
+
+        for s in self.project.series:
+            x, y = s.averaged.T.tolist()
+            dpg.add_line_series(x, y, parent="libs_y_axis", label=str(s.name))
+
+        dpg.fit_axis_data("libs_x_axis")
+        dpg.fit_axis_data("libs_y_axis")
+
+    def directory_picker_callback(self, _sender, data):
+        dpg.set_value("project_directory", data["file_path_name"])
+        self.setup_project()
 
     def setup_layout(self):
         with dpg.window(
@@ -175,6 +201,32 @@ class UI:
                         with dpg.menu_bar():
                             with dpg.menu(label="Project", enabled=False):
                                 pass
+
+                        with dpg.group(horizontal=True):
+                            dpg.add_text("Project directory".rjust(LABEL_PAD))
+                            dpg.add_input_text(
+                                tag="project_directory",
+                                width=100,
+                                callback=lambda s, d: self.setup_project(),
+                                on_enter=True,
+                            )
+                            dpg.add_button(
+                                label="Browse",
+                                width=-1,
+                                callback=lambda: dpg.show_item(
+                                    "project_directory_picker"
+                                ),
+                            )
+                        with dpg.group(horizontal=True):
+                            dpg.add_text(
+                                default_value="Chosen directory is not valid!".rjust(
+                                    LABEL_PAD
+                                ),
+                                tag="project_directory_error_message",
+                                show=False,
+                                color=(200, 20, 20, 255),
+                            )
+
                     with dpg.child_window(
                         label="Plots",
                         width=-1,
@@ -227,6 +279,7 @@ class UI:
             modal=True,
             show=False,
             directory_selector=True,
+            callback=self.directory_picker_callback,
             width=800,
             height=600,
             tag="project_directory_picker",
