@@ -6,11 +6,9 @@ from typing import Pattern, Tuple, TypedDict
 
 import chardet
 import numpy as np
+import pyarrow as pa
 from pyarrow import csv
 
-PA_READ_OPTIONS = csv.ReadOptions(skip_rows=2, autogenerate_column_names=True)
-PA_PARSE_OPTIONS = csv.ParseOptions(delimiter="\t")
-PA_CONVERT_OPTIONS = csv.ConvertOptions(decimal_point=",")
 logger = logging.getLogger(__name__)
 
 
@@ -90,14 +88,3 @@ def multi_sub(sub_pairs: list[Tuple[str, str]], string: str):
 
 def partition(alist: list, indices: list):
     return [alist[i:j] for i, j in zip([0] + indices, indices + [None])]
-
-
-def spec_to_numpy(filepath: Path):
-    return np.array(
-        csv.read_csv(
-            filepath,
-            read_options=PA_READ_OPTIONS,
-            parse_options=PA_PARSE_OPTIONS,
-            convert_options=PA_CONVERT_OPTIONS,
-        )
-    )

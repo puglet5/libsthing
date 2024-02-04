@@ -51,7 +51,11 @@ class UI:
         dpg.destroy_context()
 
     def setup_dev(self):
-        pass
+        dpg.set_value(
+            "project_directory",
+            "/home/puglet5/Documents/PROJ/libsthing/src/sandbox/libs/GR",
+        )
+        self.setup_project()
 
     def setup_themes(self):
         with dpg.theme() as self.global_theme:
@@ -107,7 +111,8 @@ class UI:
             return
 
         for s in self.project.series:
-            x, y = s.averaged.T.tolist()
+            assert s.averaged.spectral_data is not None
+            x, y = s.averaged.spectral_data_corrected.T.tolist()
             dpg.add_line_series(x, y, parent="libs_y_axis", label=str(s.name))
 
         dpg.fit_axis_data("libs_x_axis")

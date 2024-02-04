@@ -17,6 +17,7 @@ findpeaks = "*"
 pyarrow = "*"
 attrs = "*"
 natsort = "*"
+pybaselines = "*"
 
 [dev-packages]
 black = "*"
