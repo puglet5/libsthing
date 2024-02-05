@@ -1,3 +1,4 @@
+import gc
 import logging
 from pathlib import Path
 from typing import Literal
@@ -97,30 +98,51 @@ class UI:
     def bind_item_handlers(self):
         pass
 
+    def clear_plots(self):
+        dpg.delete_item("libs_y_axis", children_only=True)
+
     def setup_project(self):
         if hasattr(self, "project"):
             del self.project
+            self.clear_plots()
+            gc.collect()
 
         dpg.hide_item("project_directory_error_message")
 
         try:
-            project_dir = Path(dpg.get_value("project_directory"))
+            dir_str = dpg.get_value("project_directory")
+            if not dir_str:
+                return
+
+            project_dir = Path(dir_str)
             self.project = Project(project_dir)
         except ValueError:
             dpg.show_item("project_directory_error_message")
             return
 
-        for s in self.project.series:
-            assert s.averaged.spectral_data is not None
-            x, y = s.averaged.spectral_data_corrected.T.tolist()
-            dpg.add_line_series(x, y, parent="libs_y_axis", label=str(s.name))
-
-        dpg.fit_axis_data("libs_x_axis")
-        dpg.fit_axis_data("libs_y_axis")
+        self.show_libs_plots()
 
     def directory_picker_callback(self, _sender, data):
         dpg.set_value("project_directory", data["file_path_name"])
         self.setup_project()
+
+    def show_libs_plots(self):
+        self.clear_plots()
+
+        normalized = dpg.get_value("libs_normalized")
+        corrected = dpg.get_value("libs_baseline_corrected")
+
+        with dpg.mutex():
+            for s in self.project.series:
+                spectrum = s.averaged
+                assert spectrum.raw_spectral_data is not None
+                spectrum.process_spectral_data(normalized, corrected)
+                x, y = spectrum.xy.tolist()
+
+                dpg.add_line_series(x, y, parent="libs_y_axis", label=str(s.name))
+
+            dpg.fit_axis_data("libs_x_axis")
+            dpg.fit_axis_data("libs_y_axis")
 
     def setup_layout(self):
         with dpg.window(
@@ -242,6 +264,65 @@ class UI:
                         with dpg.menu_bar():
                             with dpg.menu(label="Plots", enabled=False):
                                 pass
+
+                        with dpg.group(horizontal=True):
+                            dpg.add_text("Normalize".rjust(LABEL_PAD))
+                            dpg.add_checkbox(
+                                tag="libs_normalized",
+                                default_value=False,
+                                callback=lambda _s, _d: self.show_libs_plots(),
+                            )
+                        with dpg.group(horizontal=True):
+                            dpg.add_text("Normalize to range:".rjust(LABEL_PAD))
+                            with dpg.group(horizontal=False):
+                                with dpg.group(horizontal=True):
+                                    dpg.add_text("from".rjust(4))
+                                    dpg.add_input_int(
+                                        tag="from",
+                                        width=-1,
+                                        max_value=10000,
+                                        min_value=1,
+                                        min_clamped=True,
+                                        max_clamped=True,
+                                        default_value=1,
+                                        on_enter=True,
+                                    )
+                                with dpg.group(horizontal=True):
+                                    dpg.add_text("to".rjust(4))
+                                    with dpg.tooltip(
+                                        dpg.last_item(), delay=TOOLTIP_DELAY_SEC
+                                    ):
+                                        dpg.add_text(
+                                            "Value of -1 indicates no upper limit (up to last row)",
+                                            wrap=400,
+                                        )
+                                    dpg.add_input_int(
+                                        tag="to",
+                                        width=-1,
+                                        max_value=10000,
+                                        min_value=-1,
+                                        default_value=-1,
+                                        min_clamped=True,
+                                        max_clamped=True,
+                                        on_enter=True,
+                                    )
+                        with dpg.group(horizontal=True):
+                            dpg.add_text("Remove baseline".rjust(LABEL_PAD))
+
+                            dpg.add_combo(
+                                tag="libs_baseline_corrected",
+                                default_value="SNIP",
+                                items=["None", "SNIP"],
+                                width=-1,
+                                callback=lambda _s, _d: self.show_libs_plots(),
+                            )
+
+                        with dpg.group(horizontal=True):
+                            dpg.add_text("Clip to zero".rjust(LABEL_PAD))
+                            dpg.add_checkbox(
+                                default_value=True,
+                                callback=lambda _s, _d: self.show_libs_plots(),
+                            )
 
                 with dpg.child_window(border=False, width=-1, tag="data"):
                     with dpg.plot(

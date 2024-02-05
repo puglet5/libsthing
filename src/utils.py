@@ -7,7 +7,7 @@ from functools import cached_property, partial, wraps
 from itertools import chain
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
-from typing import Callable, Generator, Iterable, ParamSpec, TypeVar
+from typing import Callable, Generator, Iterable, Literal, ParamSpec, TypeVar
 from xml.etree.ElementInclude import include
 
 import coloredlogs
@@ -20,7 +20,9 @@ from cycler import V
 from natsort import natsorted
 from pyarrow import csv
 from pybaselines import Baseline
-from scipy.signal import find_peaks
+from scipy.interpolate import UnivariateSpline
+from scipy.ndimage import gaussian_filter1d
+from scipy.signal import find_peaks, savgol_filter
 
 PA_READ_OPTIONS = csv.ReadOptions(skip_rows=2, autogenerate_column_names=True)
 PA_PARSE_OPTIONS = csv.ParseOptions(delimiter="\t", quote_char=False)
@@ -74,10 +76,13 @@ def loading_indicator(f: Callable[P, T], message: str) -> Callable[P, T]:  # typ
     def _wrapper(*args, **kwargs):
         dpg.configure_item("loading_indicator_message", label=message.center(30))
         threading.Timer(0.1, show_loading_indicator).start()
-        result = f(*args, **kwargs)
-        threading.Timer(0.1, hide_loading_indicator).start()
-        return result
-
+        try:
+            result = f(*args, **kwargs)
+            return result
+        except Exception as e:
+            raise ValueError from e
+        finally:
+            threading.Timer(0.1, hide_loading_indicator).start()
     return _wrapper  # type:ignore
 
 
@@ -113,15 +118,21 @@ def flatten(iter: list):
 @define
 class Spectrum:
     file: Path | None = field(default=None)
-    spectral_data: npt.NDArray | None = field(default=None, repr=False)
+    raw_spectral_data: npt.NDArray | None = field(default=None, repr=False)
+    processed_spectral_data: npt.NDArray | None = field(
+        default=None, init=False, repr=False
+    )
     common_x: npt.NDArray | None = field(default=None, repr=False)
 
     def __attrs_post_init__(self):
-        if self.spectral_data is None and self.file is not None:
-            self.spectral_data = self.spec_to_numpy()
 
-        if self.spectral_data is None and self.file is None:
+        if self.raw_spectral_data is None and self.file is not None:
+            self.raw_spectral_data = self.spec_to_numpy()
+
+        if self.raw_spectral_data is None and self.file is None:
             raise ValueError
+
+        self.processed_spectral_data = self.raw_spectral_data
 
     @classmethod
     def from_file(cls, file: Path, common_x: npt.NDArray | None = None):
@@ -129,7 +140,7 @@ class Spectrum:
 
     @classmethod
     def from_data(cls, data: npt.NDArray):
-        return cls(spectral_data=data)
+        return cls(raw_spectral_data=data)
 
     def spec_to_numpy(self):
         if not isinstance(self.common_x, np.ndarray):
@@ -158,15 +169,21 @@ class Spectrum:
 
     @cached_property
     def x(self):
-        if self.spectral_data is None:
+        if self.raw_spectral_data is None:
             raise ValueError
-        return self.spectral_data[:, 0]
+        return self.raw_spectral_data[:, 0]
 
-    @cached_property
+    @property
     def y(self):
-        if self.spectral_data is None:
+        if self.processed_spectral_data is None:
             raise ValueError
-        return self.spectral_data[:, 1]
+        return self.processed_spectral_data[:, 1]
+
+    @property
+    def xy(self):
+        if self.processed_spectral_data is None:
+            raise ValueError
+        return self.processed_spectral_data.T
 
     @cached_property
     def baseline(self):
@@ -176,33 +193,53 @@ class Spectrum:
         )[0]
         return bkg
 
-    @cached_property
-    def spectral_data_corrected(self):
-        if self.spectral_data is None:
+    def process_spectral_data(
+        self, normalized=False, baseline_removal: Literal["None", "SNIP"] = "SNIP"
+    ):
+        if (data := self.raw_spectral_data) is None:
             raise ValueError
 
-        y_clamped = np.clip(self.y - self.baseline, 0, None)
+        if normalized and baseline_removal == "None":
+            y = data.T[1]
+            y_normalized = y / y.max()
+            processed = np.array([self.x, y_normalized]).T
 
-        return np.array([self.x, y_clamped]).T
+        elif not normalized and baseline_removal == "SNIP":
+            y = data.T[1]
+            y_clamped = np.clip(y - self.baseline, 0, None)
+
+            processed = np.array([self.x, y_clamped]).T
+
+        elif normalized and baseline_removal == "SNIP":
+            y = data.T[1]
+            y_clamped = np.clip(y - self.baseline, 0, None)
+            y_normalized = y_clamped / y_clamped.max()
+            processed = np.array([self.x, y_normalized]).T
+
+        else:
+            processed = data
+
+        self.processed_spectral_data = processed
 
     def find_peaks(
         self,
-        width: tuple[int, int] = (0, 5),
-        distance=1,
-        threshold=0.1,
-        height=10,
+        height=None,
         y: npt.NDArray | None = None,
     ):
         if not isinstance(y, np.ndarray):
-            y = self.spectral_data_corrected[:, 1]
+            y = self.y
         assert y is not None
 
+        y_spl_der = -UnivariateSpline(self.x, y, s=0, k=3).derivative(2)(self.x)  # type: ignore
+        y_spl_der = np.clip(savgol_filter(y_spl_der, 3, 2), 0, None)
+
+        if height is None:
+            height = 0.005 * y_spl_der.max()
+
         peaks = find_peaks(
-            y,
-            width=width,
-            distance=distance,
-            threshold=threshold,
+            y_spl_der,
             height=height,
+            prominence=10,
         )[0]
 
         return np.array([self.x[peaks], y[peaks]]).T
@@ -224,7 +261,7 @@ class Sample:
         self.name = self.directory.name
 
     def averaged(self, drop_first: int = 0):
-        data = np.array([s.spectral_data for s in self.spectra[drop_first:]])
+        data = np.array([s.raw_spectral_data for s in self.spectra[drop_first:]])
         return Spectrum.from_data(data.mean(axis=0))
 
 
@@ -247,7 +284,7 @@ class Series:
     @cached_property
     def averaged(self):
         spectra: list[Spectrum] = flatten([s.spectra for s in self.samples])
-        data = np.array([s.spectral_data for s in spectra])
+        data = np.array([s.raw_spectral_data for s in spectra])
         spectrum = Spectrum.from_data(data.mean(axis=0))
         return spectrum
 
@@ -273,16 +310,16 @@ class Project:
         if not any(possible_series_dirs):
             raise ValueError
 
-        for directory in possible_series_dirs:
-            if not directory.name.isnumeric():
-                raise ValueError
-
         self.series_dirs = possible_series_dirs
 
     @partial(loading_indicator, message=f"Loading series...")
     @log_exec_time
     def load_series(self):
-        pool = Pool(processes=len(self.series_dirs))
-        self.series = pool.map(Series, self.series_dirs)
-        pool.terminate()
-        pool.join()
+        with Pool(processes=len(self.series_dirs)) as pool:
+            try:
+                self.series = pool.map(Series, self.series_dirs, chunksize=1)
+            except IndexError as e:
+                raise ValueError from e
+            except Exception as e:
+                logger.error(e)
+                raise ValueError from e
