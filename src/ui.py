@@ -88,9 +88,16 @@ class UI:
 
     def setup_handler_registries(self):
         with dpg.handler_registry():
-            dpg.add_key_down_handler(dpg.mvKey_Control, callback=self.on_key_ctrl)
+            dpg.add_key_down_handler(dpg.mvKey_Control, callback=self.on_key_ctrl_down)
+            dpg.add_key_release_handler(
+                dpg.mvKey_Control, callback=self.on_key_ctrl_release
+            )
 
-    def on_key_ctrl(self):
+    def on_key_ctrl_release(self):
+        dpg.configure_item("libs_plots", pan_button=dpg.mvMouseButton_Left)
+
+    def on_key_ctrl_down(self):
+        dpg.configure_item("libs_plots", pan_button=dpg.mvMouseButton_Middle)
         if dpg.is_key_pressed(dpg.mvKey_Q):
             dpg.stop_dearpygui()
             dpg.destroy_context()
@@ -257,7 +264,7 @@ class UI:
                     with dpg.child_window(
                         label="Plots",
                         width=-1,
-                        height=-1,
+                        height=400,
                         menubar=True,
                         no_scrollbar=True,
                     ):
@@ -324,11 +331,31 @@ class UI:
                                 callback=lambda _s, _d: self.show_libs_plots(),
                             )
 
+                    with dpg.child_window(
+                        label="Series",
+                        width=-1,
+                        height=-1,
+                        menubar=True,
+                        no_scrollbar=True,
+                    ):
+                        with dpg.menu_bar():
+                            with dpg.menu(label="Series", enabled=False):
+                                pass
+
+                        with dpg.group(horizontal=True):
+                            dpg.add_text("Mode".rjust(LABEL_PAD))
+                            dpg.add_combo(
+                                items=["All", "One"], default_value="All", width=-1
+                            )
+
                 with dpg.child_window(border=False, width=-1, tag="data"):
                     with dpg.plot(
                         tag="libs_plots",
                         crosshairs=True,
                         anti_aliased=True,
+                        query=True,
+                        query_button=dpg.mvMouseButton_Left,
+                        query_mod=1,
                         height=800,
                         width=-1,
                     ):

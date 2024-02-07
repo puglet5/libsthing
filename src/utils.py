@@ -3,6 +3,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 from functools import cached_property, partial, wraps
 from itertools import chain
 from multiprocessing import Pool, cpu_count
@@ -236,10 +237,12 @@ class Spectrum:
         if height is None:
             height = 0.005 * y_spl_der.max()
 
+        priminance = 0.005 * y_spl_der.max()
+
         peaks = find_peaks(
             y_spl_der,
             height=height,
-            prominence=10,
+            prominence=priminance,
         )[0]
 
         return np.array([self.x[peaks], y[peaks]]).T
@@ -270,6 +273,7 @@ class Series:
     directory: Path
     name: str | None = field(default=None)
     samples: list[Sample] = field(init=False, factory=list)
+    id: int = field(init=False, default=uuid.uuid4().int & (1 << 64) - 1)
 
     def __attrs_post_init__(self):
         child_dirs = natsorted(d for d in self.directory.iterdir() if d.is_dir())
