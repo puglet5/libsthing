@@ -135,15 +135,28 @@ class UI:
 
     def show_libs_plots(self):
         self.clear_plots()
+        range_from = dpg.get_value("normalize_from")
+        range_to = dpg.get_value("normalize_to")
+        if range_to < range_from and range_to != -1:
+            dpg.set_value("normalize_to", range_from)
+            range_to = range_from
 
         normalized = dpg.get_value("libs_normalized")
-        corrected = dpg.get_value("libs_baseline_corrected")
+        baseline_removal = dpg.get_value("libs_baseline_corrected")
+        normalization_range = (
+            dpg.get_value("normalize_from"),
+            dpg.get_value("normalize_to"),
+        )
 
         with dpg.mutex():
             for s in self.project.series:
                 spectrum = s.averaged
                 assert spectrum.raw_spectral_data is not None
-                spectrum.process_spectral_data(normalized, corrected)
+                spectrum.process_spectral_data(
+                    normalized,
+                    normalization_range=normalization_range,
+                    baseline_removal=baseline_removal,
+                )
                 x, y = spectrum.xy.tolist()
 
                 dpg.add_line_series(x, y, parent="libs_y_axis", label=str(s.name))
@@ -280,18 +293,21 @@ class UI:
                                 callback=lambda _s, _d: self.show_libs_plots(),
                             )
                         with dpg.group(horizontal=True):
-                            dpg.add_text("Normalize to range:".rjust(LABEL_PAD))
+                            dpg.add_text("Normalize in range:".rjust(LABEL_PAD))
                             with dpg.group(horizontal=False):
                                 with dpg.group(horizontal=True):
                                     dpg.add_text("from".rjust(4))
-                                    dpg.add_input_int(
-                                        tag="from",
+                                    dpg.add_input_float(
+                                        tag="normalize_from",
                                         width=-1,
                                         max_value=10000,
-                                        min_value=1,
+                                        min_value=0,
+                                        step_fast=20,
+                                        format="%.1f",
                                         min_clamped=True,
                                         max_clamped=True,
                                         default_value=1,
+                                        callback=lambda _s, _d: self.show_libs_plots(),
                                         on_enter=True,
                                     )
                                 with dpg.group(horizontal=True):
@@ -303,15 +319,18 @@ class UI:
                                             "Value of -1 indicates no upper limit (up to last row)",
                                             wrap=400,
                                         )
-                                    dpg.add_input_int(
-                                        tag="to",
+                                    dpg.add_input_float(
+                                        tag="normalize_to",
                                         width=-1,
+                                        format="%.1f",
+                                        step_fast=20,
                                         max_value=10000,
                                         min_value=-1,
                                         default_value=-1,
                                         min_clamped=True,
                                         max_clamped=True,
                                         on_enter=True,
+                                        callback=lambda _s, _d: self.show_libs_plots(),
                                     )
                         with dpg.group(horizontal=True):
                             dpg.add_text("Remove baseline".rjust(LABEL_PAD))

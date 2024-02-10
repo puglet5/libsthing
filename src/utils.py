@@ -195,32 +195,36 @@ class Spectrum:
         return bkg
 
     def process_spectral_data(
-        self, normalized=False, baseline_removal: Literal["None", "SNIP"] = "SNIP"
+        self,
+        normalized=False,
+        normalization_range: tuple[float, float] = (1, -1),
+        baseline_removal: Literal["None", "SNIP"] = "SNIP",
     ):
         if (data := self.raw_spectral_data) is None:
             raise ValueError
 
-        if normalized and baseline_removal == "None":
-            y = data.T[1]
-            y_normalized = y / y.max()
-            processed = np.array([self.x, y_normalized]).T
+        y = data.T[1]
 
-        elif not normalized and baseline_removal == "SNIP":
-            y = data.T[1]
-            y_clamped = np.clip(y - self.baseline, 0, None)
+        if baseline_removal == "SNIP":
+            y = np.clip(y - self.baseline, 0, None)
 
-            processed = np.array([self.x, y_clamped]).T
+        if normalized:
+            norm_min = max(normalization_range[0], self.x.min())
+            if normalization_range[1] == -1:
+                norm_max = self.x.max()
+            else:
+                norm_max = max(norm_min, min(normalization_range[1], self.x.max()))
 
-        elif normalized and baseline_removal == "SNIP":
-            y = data.T[1]
-            y_clamped = np.clip(y - self.baseline, 0, None)
-            y_normalized = y_clamped / y_clamped.max()
-            processed = np.array([self.x, y_normalized]).T
+            if (
+                norm_min > self.x.max()
+                or norm_max < self.x.min()
+                or norm_min == norm_max
+            ):
+                pass
+            else:
+                y = y / y[np.logical_and(self.x > norm_min, self.x < norm_max)].max()
 
-        else:
-            processed = data
-
-        self.processed_spectral_data = processed
+        self.processed_spectral_data = np.array([self.x, y]).T
 
     def find_peaks(
         self,
