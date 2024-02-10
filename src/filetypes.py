@@ -74,17 +74,3 @@ def detect_encoding(file: BytesIO):
     enc = chardet.detect(file.read())["encoding"] or "utf-8"
     file.seek(0)
     return enc
-
-
-def multi_sub(sub_pairs: list[Tuple[str, str]], string: str):
-    def repl_func(m):
-        return next(
-            repl for (_, repl), group in zip(sub_pairs, m.groups()) if group is not None
-        )
-
-    pattern = "|".join("({})".format(patt) for patt, _ in sub_pairs)
-    return re.sub(pattern, repl_func, string, flags=re.U)
-
-
-def partition(alist: list, indices: list):
-    return [alist[i:j] for i, j in zip([0] + indices, indices + [None])]

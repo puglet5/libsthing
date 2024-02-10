@@ -1,6 +1,6 @@
-import dis
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -8,8 +8,7 @@ from functools import cached_property, partial, wraps
 from itertools import chain
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
-from typing import Callable, Generator, Iterable, Literal, ParamSpec, TypeVar
-from xml.etree.ElementInclude import include
+from typing import Callable, Generator, Iterable, Literal, ParamSpec, Tuple, TypeVar
 
 import coloredlogs
 import dearpygui.dearpygui as dpg
@@ -17,7 +16,8 @@ import numpy as np
 import numpy.typing as npt
 import pyarrow as pa
 from attr import define, field
-from cycler import V
+from lmfit import Model, Parameters
+from lmfit.models import PseudoVoigtModel, VoigtModel
 from natsort import natsorted
 from pyarrow import csv
 from pybaselines import Baseline
@@ -116,6 +116,24 @@ def flatten(iter: list):
     return list(chain.from_iterable(iter))
 
 
+def multi_sub(sub_pairs: list[tuple[str, str]], string: str):
+    def repl_func(m):
+        return next(
+            repl for (_, repl), group in zip(sub_pairs, m.groups()) if group is not None
+        )
+
+    pattern = "|".join("({})".format(patt) for patt, _ in sub_pairs)
+    return re.sub(pattern, repl_func, string, flags=re.U)
+
+
+def partition(alist, indices: list):
+    return [alist[i:j] for i, j in zip([0] + indices, indices + [None])]
+
+
+def nearest(arr: np.ndarray, val: float):
+    return arr.flat[np.abs(arr - val).argmin()]
+
+
 @define
 class Spectrum:
     file: Path | None = field(default=None)
@@ -181,6 +199,10 @@ class Spectrum:
         return self.processed_spectral_data[:, 1]
 
     @property
+    def step(self):
+        return self.x[1] - self.x[0]
+
+    @property
     def xy(self):
         if self.processed_spectral_data is None:
             raise ValueError
@@ -236,20 +258,94 @@ class Spectrum:
         assert y is not None
 
         y_spl_der = -UnivariateSpline(self.x, y, s=0, k=3).derivative(2)(self.x)  # type: ignore
-        y_spl_der = np.clip(savgol_filter(y_spl_der, 3, 2), 0, None)
+        y_spl_der = np.clip(gaussian_filter1d(y_spl_der, 1), 0, None)
 
         if height is None:
             height = 0.005 * y_spl_der.max()
 
-        priminance = 0.005 * y_spl_der.max()
+        prominance = 0.001 * y_spl_der.max()
 
         peaks = find_peaks(
             y_spl_der,
             height=height,
-            prominence=priminance,
+            prominence=prominance,
         )[0]
 
         return np.array([self.x[peaks], y[peaks]]).T
+
+    def _expand_ranges(self, ranges: np.ndarray):
+        for i, rng in enumerate(ranges):
+            if i == 0:
+                rng[0] = self.x.min()
+                mid_x = rng[1] + (ranges[i + 1][0] - rng[1]) / 2
+                rng[1] = nearest(self.x, mid_x)
+            elif i == ranges.shape[0] - 1:
+                rng[0] = ranges[i - 1][1] + self.step
+                rng[1] = self.x.max()
+            else:
+                rng[0] = ranges[i - 1][1] + self.step
+                mid_x = rng[1] + (ranges[i + 1][0] - rng[1]) / 2
+                rng[1] = nearest(self.x, mid_x)
+
+        return ranges
+
+    def fit_window(self, window: np.ndarray, max_iterations: int | None = None):
+        peaks = self.find_peaks()
+
+        selected_peaks = peaks[
+            np.logical_and(
+                peaks[:, 0] >= window[0] - self.step * 0.5, peaks[:, 0] <= window[1]
+            )
+        ]
+        win_x, win_y = (
+            self.x[
+                np.logical_and(
+                    self.x >= window[0] - self.step * 0.5, self.x <= window[1]
+                )
+            ],
+            self.y[
+                np.logical_and(
+                    self.x >= window[0] - self.step * 0.5, self.x <= window[1]
+                )
+            ],
+        )
+
+        model_peaks = []
+        params = Parameters()
+        for i, peak in enumerate(selected_peaks):
+            prefix = f"pv{i}"
+            pv_model = PseudoVoigtModel(prefix=prefix)
+            model_peaks.append(pv_model)
+            params.add(f"{prefix}sigma", min=0, max=2, value=0.5)
+            params.add(f"{prefix}amplitude", min=0, value=peak[1])
+            params.add(f"{prefix}fraction", min=0, max=1, value=0.5)
+            params.add(
+                f"{prefix}center",
+                min=peak[0] - 0.5 * self.step,
+                max=peak[0] + 0.5 * self.step,
+                value=peak[0],
+            )
+
+        model: Model = np.sum(model_peaks)
+
+        result = model.fit(win_y, params, x=win_x, max_nfev=max_iterations)
+
+        return result.best_fit
+
+    @property
+    def fitting_windows(self):
+        peaks = self.find_peaks()
+        peak_x_diffs = np.diff(peaks[:, 0])
+        x_split_indices = [
+            np.where(np.isclose(peak_x_diffs, v))[0][0] + 1
+            for v in peak_x_diffs[peak_x_diffs > 1]
+        ]
+        partitioned_peaks = partition(peaks, x_split_indices)
+        partitioned_ranges = np.array(
+            [[np.min(i[:, 0]), np.max(i[:, 0])] for i in partitioned_peaks]
+        )
+
+        return self._expand_ranges(partitioned_ranges)
 
 
 @define
