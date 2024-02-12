@@ -6,9 +6,19 @@ import time
 import uuid
 from functools import cached_property, partial, wraps
 from itertools import chain
-from multiprocessing import Pool, cpu_count
+from multiprocessing import cpu_count
 from pathlib import Path
-from typing import Callable, Generator, Iterable, Literal, ParamSpec, Tuple, TypeVar
+from types import NoneType
+from typing import (
+    Any,
+    Callable,
+    Generator,
+    Iterable,
+    Literal,
+    ParamSpec,
+    Tuple,
+    TypeVar,
+)
 
 import coloredlogs
 import dearpygui.dearpygui as dpg
@@ -19,6 +29,7 @@ from attr import define, field
 from lmfit import Model, Parameters
 from lmfit.models import PseudoVoigtModel, VoigtModel
 from natsort import natsorted
+from pathos.multiprocessing import ProcessingPool as Pool
 from pyarrow import csv
 from pybaselines import Baseline
 from scipy.interpolate import UnivariateSpline
@@ -135,6 +146,77 @@ def nearest(arr: np.ndarray, val: float):
 
 
 @define
+class Peak:
+    x: float
+    y: float
+    model: Any = field(init=False, default=None)
+    id: int = field(init=False, default=0)
+    prefix: str = field(init=False, default="")
+    fwhm: float | None = field(init=False, default=None)
+    amplitude: float | None = field(init=False, default=None)
+    sigma: float | None = field(init=False, default=None)
+
+    def __attrs_post_init__(self):
+        self.id = uuid.uuid4().int & (1 << 64) - 1
+        self.prefix = f"peak{self.id}"
+        self.model = PseudoVoigtModel(prefix=self.prefix)
+
+    def estimate_params(self, win_x, win_y):
+        hwhm = 0
+        start_x_index = np.where(np.isclose(win_x, self.x))[0][0]
+        curr_x_index = start_x_index
+
+        # go right
+        while curr_x_index < len(win_x) - 1:
+            if win_y[curr_x_index] > win_y[start_x_index]:
+                break
+            if win_y[curr_x_index] <= 0.5 * win_y[start_x_index]:
+                break
+            curr_x_index += 1
+
+        hwhm = win_x[curr_x_index] - win_x[start_x_index]
+        integration_x = win_x[
+            np.logical_and(win_x >= self.x, win_x <= win_x[curr_x_index])
+        ]
+        integration_y = win_y[
+            np.logical_and(win_x >= self.x, win_x <= win_x[curr_x_index])
+        ]
+        area = np.trapz(integration_y, integration_x)
+
+        # go left
+        if curr_x_index - start_x_index == 1:
+            curr_x_index = start_x_index
+            while curr_x_index >= 0:
+
+                if win_y[curr_x_index] > win_y[start_x_index]:
+                    break
+                if win_y[curr_x_index] <= 0.5 * win_y[start_x_index]:
+                    break
+                curr_x_index -= 1
+
+                hwhm = -win_x[curr_x_index] + win_x[start_x_index]
+
+                integration_x = win_x[
+                    np.logical_and(
+                        win_x <= self.x,
+                        win_x >= win_x[curr_x_index],
+                    )
+                ]
+                integration_y = win_y[
+                    np.logical_and(
+                        win_x <= self.x,
+                        win_x >= win_x[curr_x_index],
+                    )
+                ]
+
+                area = np.trapz(integration_y, integration_x)
+
+        self.fwhm = hwhm * 2
+        self.sigma = self.fwhm / 3.6
+        self.amplitude = area / self.sigma * 0.55
+
+
+@define
 class Spectrum:
     file: Path | None = field(default=None)
     raw_spectral_data: npt.NDArray | None = field(default=None, repr=False)
@@ -142,6 +224,7 @@ class Spectrum:
         default=None, init=False, repr=False
     )
     common_x: npt.NDArray | None = field(default=None, repr=False)
+    fit_result: Any = field(init=False, default=None)
 
     def __attrs_post_init__(self):
 
@@ -208,27 +291,38 @@ class Spectrum:
             raise ValueError
         return self.processed_spectral_data.T
 
-    @cached_property
-    def baseline(self):
-        baseline_fitter = Baseline(x_data=self.x)
-        bkg = baseline_fitter.snip(
-            self.y, max_half_window=40, smooth_half_window=2, filter_order=2
-        )[0]
+    def baseline(
+        self, y: np.ndarray, method: Literal["SNIP", "Adaptive minmax", "Polynomial"]
+    ) -> np.ndarray:
+        baseline_fitter = Baseline(
+            x_data=self.x, assume_sorted=True, check_finite=False
+        )
+        if method == "SNIP":
+            bkg = baseline_fitter.snip(
+                y, max_half_window=40, smooth_half_window=2, filter_order=2
+            )[0]
+        if method == "Adaptive minmax":
+            bkg = baseline_fitter.adaptive_minmax(y)[0]
+        if method == "Polynomial":
+            bkg = baseline_fitter.penalized_poly(y, poly_order=3)[0]
+
         return bkg
 
     def process_spectral_data(
         self,
         normalized=False,
         normalization_range: tuple[float, float] = (1, -1),
-        baseline_removal: Literal["None", "SNIP"] = "SNIP",
+        baseline_removal: Literal[
+            "None", "SNIP", "Adaptive minmax", "Polynomial"
+        ] = "SNIP",
     ):
         if (data := self.raw_spectral_data) is None:
             raise ValueError
 
         y = data.T[1]
 
-        if baseline_removal == "SNIP":
-            y = np.clip(y - self.baseline, 0, None)
+        if baseline_removal != "None":
+            y = np.clip(y - self.baseline(y, method=baseline_removal), 0, None)
 
         if normalized:
             norm_min = max(normalization_range[0], self.x.min())
@@ -289,14 +383,23 @@ class Spectrum:
 
         return ranges
 
-    def fit_window(self, window: np.ndarray, max_iterations: int | None = None):
-        peaks = self.find_peaks()
+    def fit_window(
+        self, window: tuple[float, float], max_iterations: int | None = None
+    ):
+        peaks_xy = self.find_peaks()
 
-        selected_peaks = peaks[
+        selected_peaks_xy = peaks_xy[
             np.logical_and(
-                peaks[:, 0] >= window[0] - self.step * 0.5, peaks[:, 0] <= window[1]
+                peaks_xy[:, 0] >= window[0] - self.step * 0.5,
+                peaks_xy[:, 0] <= window[1],
             )
         ]
+
+        if len(selected_peaks_xy) == 0:
+            return None
+
+        selected_peaks = [Peak(*xy) for xy in selected_peaks_xy]
+
         win_x, win_y = (
             self.x[
                 np.logical_and(
@@ -310,25 +413,24 @@ class Spectrum:
             ],
         )
 
-        model_peaks = []
         params = Parameters()
-        for i, peak in enumerate(selected_peaks):
-            prefix = f"pv{i}"
-            pv_model = PseudoVoigtModel(prefix=prefix)
-            model_peaks.append(pv_model)
-            params.add(f"{prefix}sigma", min=0, max=2, value=0.5)
-            params.add(f"{prefix}amplitude", min=0, value=peak[1])
-            params.add(f"{prefix}fraction", min=0, max=1, value=0.5)
+        for peak in selected_peaks:
+            peak.estimate_params(win_x, win_y)
+            params.add(f"{peak.prefix}sigma", min=0.1, max=2, value=peak.sigma)
+            params.add(f"{peak.prefix}amplitude", min=10, value=peak.amplitude)
+            params.add(f"{peak.prefix}fraction", min=0, max=1, value=0.5)
             params.add(
-                f"{prefix}center",
-                min=peak[0] - 0.5 * self.step,
-                max=peak[0] + 0.5 * self.step,
-                value=peak[0],
+                f"{peak.prefix}center",
+                min=peak.x - 0.75 * self.step,
+                max=peak.x + 0.75 * self.step,
+                value=peak.x,
             )
 
-        model: Model = np.sum(model_peaks)
+        model: Model = np.sum([peak.model for peak in selected_peaks])
 
         result = model.fit(win_y, params, x=win_x, max_nfev=max_iterations)
+
+        self.fit_result = result
 
         return result.best_fit
 
@@ -336,16 +438,63 @@ class Spectrum:
     def fitting_windows(self):
         peaks = self.find_peaks()
         peak_x_diffs = np.diff(peaks[:, 0])
-        x_split_indices = [
+        x_split_ids = [
             np.where(np.isclose(peak_x_diffs, v))[0][0] + 1
-            for v in peak_x_diffs[peak_x_diffs > 1]
+            for v in peak_x_diffs[peak_x_diffs > 8]
         ]
-        partitioned_peaks = partition(peaks, x_split_indices)
+
+        peak_ids = {0, *x_split_ids, len(peaks)}
+
+        y_threshold = 0.001
+
+        while True:
+            peak_ids_init = peak_ids.copy()
+            peak_split_ids = sorted(list(peak_ids))
+            for i, j in zip(peak_split_ids, peak_split_ids[1:]):
+                if peaks[i:j][:, 0].size > 1:
+                    peak_win_x = peaks[i:j][:, 0]
+                    x_min, x_max = peak_win_x.min(), peak_win_x.max()
+                    win_x = self.x[np.logical_and(self.x >= x_min, self.x <= x_max)]
+                    win_y = self.y[np.logical_and(self.x >= x_min, self.x <= x_max)]
+                    y_min, y_max = win_y.min(), win_y.max()
+                    for x in win_x[win_y / y_max <= y_threshold]:
+                        split_peak_i = np.searchsorted(
+                            peaks[:, 0],
+                            [
+                                x,
+                            ],
+                            side="left",
+                        )[0]
+                        if peaks[split_peak_i][0] >= x_min:
+                            peak_ids.add(split_peak_i)
+
+            if len(peak_ids) == len(peak_ids_init):
+                break
+
+        final_split_ids = sorted(list(peak_ids))[1:-1]
+
+        partitioned_peaks = partition(peaks, final_split_ids)
         partitioned_ranges = np.array(
             [[np.min(i[:, 0]), np.max(i[:, 0])] for i in partitioned_peaks]
         )
 
-        return self._expand_ranges(partitioned_ranges)
+        windows = self._expand_ranges(partitioned_ranges)
+
+        # ensure window size >= 4 x steps
+        small_ids = {
+            i
+            for i, w in enumerate(windows)
+            if self.x[np.logical_and(self.x >= w[0], self.x <= w[1])].size < 4
+        }
+
+        for i in small_ids.copy():
+            if i in small_ids:
+                print(i, windows[i])
+                windows[i, 1] = windows[i + 1, 1]
+                windows = np.delete(windows, i + 1, axis=0)
+                small_ids.discard(i)
+
+        return windows
 
 
 @define
@@ -373,9 +522,11 @@ class Series:
     directory: Path
     name: str | None = field(default=None)
     samples: list[Sample] = field(init=False, factory=list)
-    id: int = field(init=False, default=uuid.uuid4().int & (1 << 64) - 1)
+    id: int = field(init=False, default=0)
 
     def __attrs_post_init__(self):
+        self.id = uuid.uuid4().int & (1 << 64) - 1
+
         child_dirs = natsorted(d for d in self.directory.iterdir() if d.is_dir())
         if not child_dirs:
             self.samples = [Sample(self.directory)]

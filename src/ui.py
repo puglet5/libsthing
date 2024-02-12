@@ -338,7 +338,7 @@ class UI:
                             dpg.add_combo(
                                 tag="libs_baseline_corrected",
                                 default_value="SNIP",
-                                items=["None", "SNIP"],
+                                items=["None", "SNIP", "Adaptive minmax", "Polynomial"],
                                 width=-1,
                                 callback=lambda _s, _d: self.show_libs_plots(),
                             )

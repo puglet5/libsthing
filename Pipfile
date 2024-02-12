@@ -13,11 +13,11 @@ scipy = "*"
 scikit-learn = "*"
 chardet = "*"
 lmfit = "*"
-findpeaks = "*"
 pyarrow = "*"
 attrs = "*"
 natsort = "*"
 pybaselines = "*"
+pathos = "*"
 
 [dev-packages]
 black = "*"
