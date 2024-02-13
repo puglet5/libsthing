@@ -211,7 +211,7 @@ class UI:
 
     def toggle_series_list(self, state):
         dpg.delete_item("series_list_wrapper", children_only=True)
-        if state == "Single":
+        if state == "Select":
             for s in self.project.series.values():
                 dpg.add_selectable(
                     label=str(s.name).rjust(LABEL_PAD + 5),
@@ -233,6 +233,9 @@ class UI:
         self.project.series[id].selected = state
 
         self.show_libs_plots()
+
+    def perform_fit(self):
+        dpg.show_item("fitting_results")
 
     def setup_layout(self):
         with dpg.window(
@@ -304,8 +307,8 @@ class UI:
                 with dpg.child_window(
                     border=False, width=self.sidebar_width, tag="sidebar"
                 ):
-                    dpg.add_progress_bar(tag="table_progress", width=-1, height=19)
-                    with dpg.tooltip("table_progress", delay=TOOLTIP_DELAY_SEC):
+                    dpg.add_progress_bar(tag="progress_bar", width=-1, height=19)
+                    with dpg.tooltip("progress_bar", delay=TOOLTIP_DELAY_SEC):
                         dpg.add_text("Current operation progress")
 
                     with dpg.child_window(
@@ -466,7 +469,7 @@ class UI:
                         with dpg.group(horizontal=True):
                             dpg.add_text("Mode".rjust(LABEL_PAD))
                             dpg.add_combo(
-                                items=["All", "Single"],
+                                items=["All", "Select", "Single"],
                                 default_value="All",
                                 width=-1,
                                 callback=lambda s, d: self.toggle_series_list(d),
@@ -486,10 +489,17 @@ class UI:
                             with dpg.menu(label="Fitting", enabled=False):
                                 pass
 
+                        with dpg.group(horizontal=True):
+                            dpg.add_button(
+                                label="Fit region".rjust(LABEL_PAD),
+                                callback=lambda s, d: self.perform_fit(),
+                            )
+
                 with dpg.child_window(border=False, width=-1, tag="data"):
                     with dpg.group(horizontal=True):
                         with dpg.child_window(
                             label="Fitting results",
+                            tag="fitting_results",
                             width=400,
                             height=800,
                             menubar=True,

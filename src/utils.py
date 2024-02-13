@@ -85,8 +85,8 @@ def hide_loading_indicator():
 
 
 def loading_indicator(
-    f: Callable[P, Generator[float, None, None]], message: str
-) -> Callable[P, T]:  # type:ignore
+    f: Callable[P, Generator[float | int, Any | None, None]], message: str
+) -> Callable[P, Generator[float | int, Any | None, None]]:  # type:ignore
     @wraps(f)
     def _wrapper(*args, **kwargs):
         dpg.configure_item("loading_indicator_message", label=message.center(30))
@@ -96,26 +96,23 @@ def loading_indicator(
         try:
             while True:
                 progress = next(progress_generator)
-                dpg.set_value("table_progress", progress)
-                dpg.configure_item("table_progress", overlay=f"{progress*100:.0f}%")
+                dpg.configure_item(
+                    "loading_indicator_message",
+                    label=f"{message}: {progress:.0f}%".center(30),
+                )
         except StopIteration as result:
-            dpg.set_value("table_progress", 0)
-            dpg.configure_item("table_progress", overlay="")
             return result.value
         except TypeError:
-            dpg.set_value("table_progress", 0)
-            dpg.configure_item("table_progress", overlay="")
             return None
-        finally:
-            threading.Timer(0.1, hide_loading_indicator).start()
-
-        try:
-            result = f(*args, **kwargs)
-            return result
         except Exception as e:
             raise ValueError from e
         finally:
-            threading.Timer(0.1, hide_loading_indicator).start()
+            dpg.configure_item(
+                "loading_indicator_message",
+                label=f"{message}: 100%".center(30),
+            )
+            threading.Timer(0.5, hide_loading_indicator).start()
+
     return _wrapper  # type:ignore
 
 
@@ -128,15 +125,15 @@ def progress_bar(
         try:
             while True:
                 progress = next(progress_generator)
-                dpg.set_value("table_progress", progress)
-                dpg.configure_item("table_progress", overlay=f"{progress*100:.0f}%")
+                dpg.set_value("progress_bar", progress)
+                dpg.configure_item("progress_bar", overlay=f"{progress*100:.0f}%")
         except StopIteration as result:
-            dpg.set_value("table_progress", 0)
-            dpg.configure_item("table_progress", overlay="")
+            dpg.set_value("progress_bar", 0)
+            dpg.configure_item("progress_bar", overlay="")
             return result.value
         except TypeError:
-            dpg.set_value("table_progress", 0)
-            dpg.configure_item("table_progress", overlay="")
+            dpg.set_value("progress_bar", 0)
+            dpg.configure_item("progress_bar", overlay="")
             return None
 
     return _wrapper  # type:ignore
@@ -597,14 +594,14 @@ class Project:
 
         self.series_dirs = possible_series_dirs
 
-    @partial(loading_indicator, message=f"Loading series...")
     @log_exec_time
+    @partial(loading_indicator, message=f"Loading series")
     def load_series(self):
         with Pool(processes=CPU_COUNT) as pool:
             try:
                 result = pool.amap(Series, self.series_dirs, chunksize=1)
                 while not result.ready():
-                    yield result._number_left
+                    yield (1 - result._number_left / len(self.series_dirs)) * 100
                     time.sleep(0.01)
                 self.series = {s.id: s for s in result.get()}
             except IndexError as e:
