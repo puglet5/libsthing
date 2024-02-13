@@ -15,6 +15,7 @@ from typing import (
     Generator,
     Iterable,
     Literal,
+    Mapping,
     ParamSpec,
     Tuple,
     TypeVar,
@@ -83,11 +84,31 @@ def hide_loading_indicator():
         dpg.hide_item("loading_indicator")
 
 
-def loading_indicator(f: Callable[P, T], message: str) -> Callable[P, T]:  # type:ignore
+def loading_indicator(
+    f: Callable[P, Generator[float, None, None]], message: str
+) -> Callable[P, T]:  # type:ignore
     @wraps(f)
     def _wrapper(*args, **kwargs):
         dpg.configure_item("loading_indicator_message", label=message.center(30))
         threading.Timer(0.1, show_loading_indicator).start()
+        progress_generator = f(*args, **kwargs)
+
+        try:
+            while True:
+                progress = next(progress_generator)
+                dpg.set_value("table_progress", progress)
+                dpg.configure_item("table_progress", overlay=f"{progress*100:.0f}%")
+        except StopIteration as result:
+            dpg.set_value("table_progress", 0)
+            dpg.configure_item("table_progress", overlay="")
+            return result.value
+        except TypeError:
+            dpg.set_value("table_progress", 0)
+            dpg.configure_item("table_progress", overlay="")
+            return None
+        finally:
+            threading.Timer(0.1, hide_loading_indicator).start()
+
         try:
             result = f(*args, **kwargs)
             return result
@@ -292,19 +313,18 @@ class Spectrum:
         return self.processed_spectral_data.T
 
     def baseline(
-        self, y: np.ndarray, method: Literal["SNIP", "Adaptive minmax", "Polynomial"]
+        self,
+        y: np.ndarray,
+        method: Literal["SNIP", "Adaptive minmax", "Polynomial"],
+        method_params: dict,
     ) -> np.ndarray:
-        baseline_fitter = Baseline(
-            x_data=self.x, assume_sorted=True, check_finite=False
-        )
+        baseline_fitter = Baseline(x_data=self.x)
         if method == "SNIP":
-            bkg = baseline_fitter.snip(
-                y, max_half_window=40, smooth_half_window=2, filter_order=2
-            )[0]
+            bkg = baseline_fitter.snip(y, **method_params)[0]
         if method == "Adaptive minmax":
             bkg = baseline_fitter.adaptive_minmax(y)[0]
         if method == "Polynomial":
-            bkg = baseline_fitter.penalized_poly(y, poly_order=3)[0]
+            bkg = baseline_fitter.penalized_poly(y, poly_order=8)[0]
 
         return bkg
 
@@ -312,9 +332,11 @@ class Spectrum:
         self,
         normalized=False,
         normalization_range: tuple[float, float] = (1, -1),
+        baseline_clip=True,
         baseline_removal: Literal[
             "None", "SNIP", "Adaptive minmax", "Polynomial"
         ] = "SNIP",
+        baseline_params: dict = {},
     ):
         if (data := self.raw_spectral_data) is None:
             raise ValueError
@@ -322,7 +344,14 @@ class Spectrum:
         y = data.T[1]
 
         if baseline_removal != "None":
-            y = np.clip(y - self.baseline(y, method=baseline_removal), 0, None)
+            bkg = self.baseline(
+                y, method=baseline_removal, method_params=baseline_params
+            )
+
+            if baseline_clip:
+                y = np.clip(y - bkg, 0, None)
+            else:
+                y = y - bkg
 
         if normalized:
             norm_min = max(normalization_range[0], self.x.min())
@@ -489,7 +518,6 @@ class Spectrum:
 
         for i in small_ids.copy():
             if i in small_ids:
-                print(i, windows[i])
                 windows[i, 1] = windows[i + 1, 1]
                 windows = np.delete(windows, i + 1, axis=0)
                 small_ids.discard(i)
@@ -522,10 +550,11 @@ class Series:
     directory: Path
     name: str | None = field(default=None)
     samples: list[Sample] = field(init=False, factory=list)
-    id: int = field(init=False, default=0)
+    id: str = field(init=False, default=0)
+    selected: bool = field(init=False, default=True)
 
     def __attrs_post_init__(self):
-        self.id = uuid.uuid4().int & (1 << 64) - 1
+        self.id = str(uuid.uuid4())
 
         child_dirs = natsorted(d for d in self.directory.iterdir() if d.is_dir())
         if not child_dirs:
@@ -548,7 +577,8 @@ class Series:
 class Project:
     directory: Path
     series_dirs: list[Path] = field(init=False, factory=list)
-    series: list[Series] = field(init=False, factory=list)
+    series: Mapping[str, Series] = field(init=False, factory=list)
+    plotted_series_ids: set[str] = field(init=False, default=set())
 
     def __attrs_post_init__(self):
         self.validate_directory()
@@ -570,9 +600,13 @@ class Project:
     @partial(loading_indicator, message=f"Loading series...")
     @log_exec_time
     def load_series(self):
-        with Pool(processes=len(self.series_dirs)) as pool:
+        with Pool(processes=CPU_COUNT) as pool:
             try:
-                self.series = pool.map(Series, self.series_dirs, chunksize=1)
+                result = pool.amap(Series, self.series_dirs, chunksize=1)
+                while not result.ready():
+                    yield result._number_left
+                    time.sleep(0.01)
+                self.series = {s.id: s for s in result.get()}
             except IndexError as e:
                 raise ValueError from e
             except Exception as e:

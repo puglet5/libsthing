@@ -1,10 +1,13 @@
 import gc
 import logging
+from operator import call
 from pathlib import Path
 from typing import Literal
 
 import dearpygui.dearpygui as dpg
+import numpy as np
 from attrs import define, field
+from natsort import natsorted
 
 from src.utils import Project, loading_indicator, log_exec_time
 
@@ -134,7 +137,6 @@ class UI:
         self.setup_project()
 
     def show_libs_plots(self):
-        self.clear_plots()
         range_from = dpg.get_value("normalize_from")
         range_to = dpg.get_value("normalize_to")
         if range_to < range_from and range_to != -1:
@@ -148,21 +150,89 @@ class UI:
             dpg.get_value("normalize_to"),
         )
 
+        selected_series = [s for s in self.project.series.values() if s.selected]
+        selected_series = natsorted(selected_series, key=lambda s: s.name)
+
         with dpg.mutex():
-            for s in self.project.series:
+            for id, s in enumerate(selected_series):
                 spectrum = s.averaged
                 assert spectrum.raw_spectral_data is not None
                 spectrum.process_spectral_data(
                     normalized,
                     normalization_range=normalization_range,
                     baseline_removal=baseline_removal,
+                    baseline_clip=dpg.get_value("clip_baseline"),
+                    baseline_params={
+                        "max_half_window": dpg.get_value("max_half_window"),
+                        "filter_order": int(dpg.get_value("filter_order")),
+                    },
                 )
                 x, y = spectrum.xy.tolist()
 
-                dpg.add_line_series(x, y, parent="libs_y_axis", label=str(s.name))
+                plot_color = np.array(
+                    dpg.sample_colormap(
+                        dpg.mvPlotColormap_Spectral, id / len(self.project.series)
+                    )
+                ) * [255, 255, 255, 200]
 
-            dpg.fit_axis_data("libs_x_axis")
-            dpg.fit_axis_data("libs_y_axis")
+                with dpg.theme() as plot_theme:
+                    with dpg.theme_component(dpg.mvLineSeries):
+                        dpg.add_theme_color(
+                            dpg.mvPlotCol_Line,
+                            plot_color.tolist(),
+                            category=dpg.mvThemeCat_Plots,
+                        )
+
+                if dpg.does_item_exist(f"series_plot_{s.id}"):
+                    dpg.configure_item(f"series_plot_{s.id}", x=x, y=y)
+                    dpg.bind_item_theme(f"series_plot_{s.id}", plot_theme)
+                else:
+                    dpg.add_line_series(
+                        x,
+                        y,
+                        parent="libs_y_axis",
+                        label=str(s.name),
+                        tag=f"series_plot_{s.id}",
+                    )
+                    dpg.bind_item_theme(dpg.last_item(), plot_theme)
+
+                self.project.plotted_series_ids.add(s.id)
+
+            if dpg.get_value("fit_to_axes"):
+                dpg.fit_axis_data("libs_x_axis")
+                dpg.fit_axis_data("libs_y_axis")
+
+            for s in self.project.series.values():
+                if s.id in self.project.plotted_series_ids and not s.id in [
+                    s.id for s in selected_series
+                ]:
+                    self.project.plotted_series_ids.discard(s.id)
+                    dpg.delete_item(f"series_plot_{s.id}")
+
+    def toggle_series_list(self, state):
+        dpg.delete_item("series_list_wrapper", children_only=True)
+        if state == "Single":
+            for s in self.project.series.values():
+                dpg.add_selectable(
+                    label=str(s.name).rjust(LABEL_PAD + 5),
+                    parent="series_list_wrapper",
+                    default_value=s.selected,
+                    user_data=s.id,
+                    callback=lambda s, d: self.toggle_series_selection(s, d),
+                )
+
+        if state == "All":
+            for s in self.project.series.values():
+                s.selected = True
+        self.show_libs_plots()
+
+    def toggle_series_selection(self, sender, state: bool):
+        id = dpg.get_item_user_data(sender)
+        assert isinstance(id, str)
+
+        self.project.series[id].selected = state
+
+        self.show_libs_plots()
 
     def setup_layout(self):
         with dpg.window(
@@ -332,6 +402,15 @@ class UI:
                                         on_enter=True,
                                         callback=lambda _s, _d: self.show_libs_plots(),
                                     )
+
+                        with dpg.group(horizontal=True):
+                            dpg.add_text("Always fit to axes".rjust(LABEL_PAD))
+                            dpg.add_checkbox(
+                                tag="fit_to_axes",
+                                default_value=True,
+                                callback=lambda _s, _d: self.show_libs_plots(),
+                            )
+
                         with dpg.group(horizontal=True):
                             dpg.add_text("Remove baseline".rjust(LABEL_PAD))
 
@@ -347,13 +426,36 @@ class UI:
                             dpg.add_text("Clip to zero".rjust(LABEL_PAD))
                             dpg.add_checkbox(
                                 default_value=True,
+                                tag="clip_baseline",
+                                callback=lambda _s, _d: self.show_libs_plots(),
+                            )
+
+                        with dpg.group(horizontal=True):
+                            dpg.add_text("Max half window".rjust(LABEL_PAD))
+                            dpg.add_slider_int(
+                                default_value=40,
+                                width=-1,
+                                tag="max_half_window",
+                                min_value=2,
+                                max_value=80,
+                                clamped=True,
+                                callback=lambda _s, _d: self.show_libs_plots(),
+                            )
+
+                        with dpg.group(horizontal=True):
+                            dpg.add_text("Filter order".rjust(LABEL_PAD))
+                            dpg.add_combo(
+                                items=["2", "4", "6", "8"],
+                                default_value="2",
+                                width=-1,
+                                tag="filter_order",
                                 callback=lambda _s, _d: self.show_libs_plots(),
                             )
 
                     with dpg.child_window(
                         label="Series",
                         width=-1,
-                        height=-1,
+                        height=300,
                         menubar=True,
                         no_scrollbar=True,
                     ):
@@ -364,31 +466,61 @@ class UI:
                         with dpg.group(horizontal=True):
                             dpg.add_text("Mode".rjust(LABEL_PAD))
                             dpg.add_combo(
-                                items=["All", "One"], default_value="All", width=-1
+                                items=["All", "Single"],
+                                default_value="All",
+                                width=-1,
+                                callback=lambda s, d: self.toggle_series_list(d),
                             )
 
-                with dpg.child_window(border=False, width=-1, tag="data"):
-                    with dpg.plot(
-                        tag="libs_plots",
-                        crosshairs=True,
-                        anti_aliased=True,
-                        query=True,
-                        query_button=dpg.mvMouseButton_Left,
-                        query_mod=1,
-                        height=800,
+                        with dpg.group(horizontal=False, tag="series_list_wrapper"):
+                            pass
+
+                    with dpg.child_window(
+                        label="Fitting",
                         width=-1,
+                        height=-1,
+                        menubar=True,
+                        no_scrollbar=True,
                     ):
-                        dpg.add_plot_legend(location=9)
-                        dpg.add_plot_axis(
-                            dpg.mvXAxis,
-                            label="Wavelength, nm",
-                            tag="libs_x_axis",
-                        )
-                        dpg.add_plot_axis(
-                            dpg.mvYAxis,
-                            label="Line Intensity (arb. unit of energy flux)",
-                            tag="libs_y_axis",
-                        )
+                        with dpg.menu_bar():
+                            with dpg.menu(label="Fitting", enabled=False):
+                                pass
+
+                with dpg.child_window(border=False, width=-1, tag="data"):
+                    with dpg.group(horizontal=True):
+                        with dpg.child_window(
+                            label="Fitting results",
+                            width=400,
+                            height=800,
+                            menubar=True,
+                            show=False,
+                            no_scrollbar=True,
+                        ):
+                            with dpg.menu_bar():
+                                with dpg.menu(label="Fitting results", enabled=False):
+                                    pass
+
+                        with dpg.plot(
+                            tag="libs_plots",
+                            crosshairs=True,
+                            anti_aliased=True,
+                            query=True,
+                            query_button=dpg.mvMouseButton_Left,
+                            query_mod=1,
+                            height=800,
+                            width=-1,
+                        ):
+                            dpg.add_plot_legend(location=4)
+                            dpg.add_plot_axis(
+                                dpg.mvXAxis,
+                                label="Wavelength, nm",
+                                tag="libs_x_axis",
+                            )
+                            dpg.add_plot_axis(
+                                dpg.mvYAxis,
+                                label="Line Intensity (arb. unit of energy flux)",
+                                tag="libs_y_axis",
+                            )
 
                     with dpg.plot(
                         tag="calibration_plots",
