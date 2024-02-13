@@ -243,6 +243,8 @@ class Spectrum:
     )
     common_x: npt.NDArray | None = field(default=None, repr=False)
     fit_result: Any = field(init=False, default=None)
+    peaks: npt.NDArray = field(init=False, factory=lambda: np.array([]))
+    fitting_windows: npt.NDArray = field(init=False, factory=lambda: np.array([]))
 
     def __attrs_post_init__(self):
 
@@ -300,7 +302,7 @@ class Spectrum:
         return self.processed_spectral_data[:, 1]
 
     @property
-    def step(self):
+    def step(self) -> float:
         return self.x[1] - self.x[0]
 
     @property
@@ -391,7 +393,7 @@ class Spectrum:
             prominence=prominance,
         )[0]
 
-        return np.array([self.x[peaks], y[peaks]]).T
+        self.peaks = np.array([self.x[peaks], y[peaks]]).T
 
     def _expand_ranges(self, ranges: np.ndarray):
         for i, rng in enumerate(ranges):
@@ -412,12 +414,15 @@ class Spectrum:
     def fit_window(
         self, window: tuple[float, float], max_iterations: int | None = None
     ):
-        peaks_xy = self.find_peaks()
+        self.find_peaks()
+        peaks_xy = self.peaks
+
+        x_min, x_max = window[0] - self.step * 0.5, window[1]
 
         selected_peaks_xy = peaks_xy[
             np.logical_and(
-                peaks_xy[:, 0] >= window[0] - self.step * 0.5,
-                peaks_xy[:, 0] <= window[1],
+                peaks_xy[:, 0] >= x_min,
+                peaks_xy[:, 0] <= x_max,
             )
         ]
 
@@ -427,16 +432,8 @@ class Spectrum:
         selected_peaks = [Peak(*xy) for xy in selected_peaks_xy]
 
         win_x, win_y = (
-            self.x[
-                np.logical_and(
-                    self.x >= window[0] - self.step * 0.5, self.x <= window[1]
-                )
-            ],
-            self.y[
-                np.logical_and(
-                    self.x >= window[0] - self.step * 0.5, self.x <= window[1]
-                )
-            ],
+            self.x[np.logical_and(self.x >= x_min, self.x <= x_max)],
+            self.y[np.logical_and(self.x >= x_min, self.x <= x_max)],
         )
 
         params = Parameters()
@@ -454,44 +451,51 @@ class Spectrum:
 
         model: Model = np.sum([peak.model for peak in selected_peaks])
 
-        result = model.fit(win_y, params, x=win_x, max_nfev=max_iterations)
+        result = model.fit(win_y, params=params, x=win_x, max_nfev=max_iterations)
 
         self.fit_result = result
 
         return result.best_fit
 
-    @property
-    def fitting_windows(self):
-        peaks = self.find_peaks()
-        peak_x_diffs = np.diff(peaks[:, 0])
+    def generate_fitting_windows(
+        self,
+        x_threshold=8.000,
+        y_threshold=0.001,
+        threshold_type: Literal["Relative", "Absolute"] = "Relative",
+    ):
+        self.find_peaks()
+        peak_x_diffs = np.diff(self.peaks[:, 0])
         x_split_ids = [
             np.where(np.isclose(peak_x_diffs, v))[0][0] + 1
-            for v in peak_x_diffs[peak_x_diffs > 8]
+            for v in peak_x_diffs[peak_x_diffs > x_threshold]
         ]
 
-        peak_ids = {0, *x_split_ids, len(peaks)}
-
-        y_threshold = 0.001
+        peak_ids = {0, *x_split_ids, len(self.peaks)}
 
         while True:
             peak_ids_init = peak_ids.copy()
             peak_split_ids = sorted(list(peak_ids))
             for i, j in zip(peak_split_ids, peak_split_ids[1:]):
-                if peaks[i:j][:, 0].size > 1:
-                    peak_win_x = peaks[i:j][:, 0]
+                if self.peaks[i:j][:, 0].size > 1:
+                    peak_win_x = self.peaks[i:j][:, 0]
                     x_min, x_max = peak_win_x.min(), peak_win_x.max()
                     win_x = self.x[np.logical_and(self.x >= x_min, self.x <= x_max)]
                     win_y = self.y[np.logical_and(self.x >= x_min, self.x <= x_max)]
                     y_min, y_max = win_y.min(), win_y.max()
-                    for x in win_x[win_y / y_max <= y_threshold]:
+
+                    if threshold_type == "Absolute":
+                        mask = win_y <= y_threshold
+                    else:
+                        mask = win_y / y_max <= y_threshold
+                    for x in win_x[mask]:
                         split_peak_i = np.searchsorted(
-                            peaks[:, 0],
+                            self.peaks[:, 0],
                             [
                                 x,
                             ],
                             side="left",
                         )[0]
-                        if peaks[split_peak_i][0] >= x_min:
+                        if self.peaks[split_peak_i][0] >= x_min:
                             peak_ids.add(split_peak_i)
 
             if len(peak_ids) == len(peak_ids_init):
@@ -499,7 +503,7 @@ class Spectrum:
 
         final_split_ids = sorted(list(peak_ids))[1:-1]
 
-        partitioned_peaks = partition(peaks, final_split_ids)
+        partitioned_peaks = partition(self.peaks, final_split_ids)
         partitioned_ranges = np.array(
             [[np.min(i[:, 0]), np.max(i[:, 0])] for i in partitioned_peaks]
         )
@@ -519,7 +523,7 @@ class Spectrum:
                 windows = np.delete(windows, i + 1, axis=0)
                 small_ids.discard(i)
 
-        return windows
+        self.fitting_windows = windows
 
 
 @define
@@ -549,6 +553,7 @@ class Series:
     samples: list[Sample] = field(init=False, factory=list)
     id: str = field(init=False, default=0)
     selected: bool = field(init=False, default=True)
+    color: list[int] | None = field(init=False, default=None)
 
     def __attrs_post_init__(self):
         self.id = str(uuid.uuid4())
@@ -595,7 +600,7 @@ class Project:
         self.series_dirs = possible_series_dirs
 
     @log_exec_time
-    @partial(loading_indicator, message=f"Loading series")
+    @partial(loading_indicator, message="Loading series")
     def load_series(self):
         with Pool(processes=CPU_COUNT) as pool:
             try:

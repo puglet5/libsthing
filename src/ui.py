@@ -2,6 +2,7 @@ import gc
 import logging
 from operator import call
 from pathlib import Path
+from re import L
 from typing import Literal
 
 import dearpygui.dearpygui as dpg
@@ -60,6 +61,7 @@ class UI:
             "/home/puglet5/Documents/PROJ/libsthing/src/sandbox/libs/GR",
         )
         self.setup_project()
+        self.window_resize_callback()
 
     def setup_themes(self):
         with dpg.theme() as self.global_theme:
@@ -67,7 +69,10 @@ class UI:
                 dpg.add_theme_style(
                     dpg.mvStyleVar_ButtonTextAlign, 0.5, category=dpg.mvThemeCat_Core
                 )
-
+            with dpg.theme_component(dpg.mvLineSeries):
+                dpg.add_theme_style(
+                    dpg.mvPlotStyleVar_LineWeight, 2, category=dpg.mvThemeCat_Plots
+                )
         with dpg.theme() as self.button_theme:
             with dpg.theme_component(dpg.mvButton):
                 dpg.add_theme_color(
@@ -96,8 +101,13 @@ class UI:
                 dpg.mvKey_Control, callback=self.on_key_ctrl_release
             )
 
+        with dpg.item_handler_registry(tag="window_resize_handler"):
+            dpg.add_item_resize_handler(callback=self.window_resize_callback)
+
     def on_key_ctrl_release(self):
         dpg.configure_item("libs_plots", pan_button=dpg.mvMouseButton_Left)
+        if not dpg.is_plot_queried("libs_plots"):
+            dpg.set_value("plot_selected_region_text", "None")
 
     def on_key_ctrl_down(self):
         dpg.configure_item("libs_plots", pan_button=dpg.mvMouseButton_Middle)
@@ -106,7 +116,7 @@ class UI:
             dpg.destroy_context()
 
     def bind_item_handlers(self):
-        pass
+        dpg.bind_item_handler_registry(self.window, "window_resize_handler")
 
     def clear_plots(self):
         dpg.delete_item("libs_y_axis", children_only=True)
@@ -169,17 +179,22 @@ class UI:
                 )
                 x, y = spectrum.xy.tolist()
 
-                plot_color = np.array(
-                    dpg.sample_colormap(
-                        dpg.mvPlotColormap_Spectral, id / len(self.project.series)
-                    )
-                ) * [255, 255, 255, 200]
+                if s.color is None:
+                    s.color = (
+                        np.array(
+                            dpg.sample_colormap(
+                                dpg.mvPlotColormap_Spectral,
+                                id / (len(self.project.series)),
+                            )
+                        )
+                        * [255, 255, 255, 200]
+                    ).tolist()
 
                 with dpg.theme() as plot_theme:
                     with dpg.theme_component(dpg.mvLineSeries):
                         dpg.add_theme_color(
                             dpg.mvPlotCol_Line,
-                            plot_color.tolist(),
+                            s.color,
                             category=dpg.mvThemeCat_Plots,
                         )
 
@@ -194,7 +209,7 @@ class UI:
                         label=str(s.name),
                         tag=f"series_plot_{s.id}",
                     )
-                    dpg.bind_item_theme(dpg.last_item(), plot_theme)
+                    dpg.bind_item_theme(f"series_plot_{s.id}", plot_theme)
 
                 self.project.plotted_series_ids.add(s.id)
 
@@ -233,9 +248,67 @@ class UI:
         self.project.series[id].selected = state
 
         self.show_libs_plots()
+        self.refresh_fitting_windows()
 
     def perform_fit(self):
         dpg.show_item("fitting_results")
+
+    def plot_query_callback(self, sender, data):
+        region = f"{(data[0]):.2f}..{(data[1]):.2f} nm"
+        dpg.set_value("plot_selected_region_text", region)
+
+    def window_resize_callback(self, _sender=None, _data=None):
+        w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
+        if dpg.does_item_exist("loading_indicator"):
+            dpg.configure_item("loading_indicator", pos=(w // 2 - 100, h // 2 - 100))
+
+    def toggle_fitting_windows(self, state: bool):
+        if not state:
+            dpg.delete_item("libs_plots", children_only=True, slot=0)
+
+        else:
+            selected_series = [s for s in self.project.series.values() if s.selected]
+            selected_series = natsorted(selected_series, key=lambda s: s.name)
+
+            with dpg.mutex():
+                for id, s in enumerate(selected_series):
+                    spectrum = s.averaged
+                    x_threshold = dpg.get_value("fitting_windows_x_threshold")
+                    y_threshold = dpg.get_value("fitting_windows_y_threshold")
+                    threshold_type = dpg.get_value("fitting_windows_y_threshold_type")
+                    spectrum.generate_fitting_windows(
+                        x_threshold=x_threshold,
+                        y_threshold=y_threshold,
+                        threshold_type=threshold_type,
+                    )
+                    windows = spectrum.fitting_windows
+                    x, _ = windows.T.tolist()
+
+                    assert s.color
+
+                    for i, e in enumerate(x):
+                        dpg.add_drag_line(
+                            color=s.color,
+                            default_value=e,
+                            parent="libs_plots",
+                            label=f"{s.name}_fitting_window_{i}",
+                            tag=f"{s.id}_fitting_window_{i}",
+                        )
+
+    def refresh_fitting_windows(self):
+        if dpg.get_value("toggle_fitting_windows_checkbox"):
+            self.toggle_fitting_windows(False)
+            self.toggle_fitting_windows(True)
+
+    def change_fitting_windows_threshold_type(self, t_type):
+        if t_type == "Absolute":
+            dpg.configure_item("fitting_windows_y_threshold", max_value=500)
+        elif t_type == "Relative":
+            dpg.configure_item("fitting_windows_y_threshold", max_value=0.1)
+            if dpg.get_value("fitting_windows_y_threshold") > 0.1:
+                dpg.set_value("fitting_windows_y_threshold", 0.1)
+
+        self.refresh_fitting_windows()
 
     def setup_layout(self):
         with dpg.window(
@@ -490,26 +563,67 @@ class UI:
                                 pass
 
                         with dpg.group(horizontal=True):
+                            dpg.add_text(
+                                "Selected region:".rjust(LABEL_PAD),
+                            )
+                            dpg.add_text("None", tag="plot_selected_region_text")
+
+                        with dpg.group(horizontal=True):
                             dpg.add_button(
-                                label="Fit region".rjust(LABEL_PAD),
+                                label="Fit region",
                                 callback=lambda s, d: self.perform_fit(),
+                            )
+                        with dpg.group(horizontal=True):
+                            dpg.add_text(
+                                "Show fitting windows".rjust(LABEL_PAD),
+                            )
+                            dpg.add_checkbox(
+                                default_value=False,
+                                tag="toggle_fitting_windows_checkbox",
+                                callback=lambda s, d: self.toggle_fitting_windows(d),
+                            )
+                        with dpg.group(horizontal=True):
+                            dpg.add_text(
+                                "X Window threshold".rjust(LABEL_PAD),
+                            )
+                            dpg.add_slider_float(
+                                default_value=20,
+                                min_value=0,
+                                max_value=40,
+                                format="%.2f",
+                                clamped=True,
+                                tag="fitting_windows_x_threshold",
+                                callback=lambda s, d: self.refresh_fitting_windows(),
+                                width=-1,
+                            )
+                        with dpg.group(horizontal=True):
+                            dpg.add_text(
+                                "Y Window threshold".rjust(LABEL_PAD),
+                            )
+                            dpg.add_slider_float(
+                                default_value=0.001,
+                                min_value=0,
+                                max_value=0.2,
+                                format="%.3f",
+                                clamped=True,
+                                tag="fitting_windows_y_threshold",
+                                callback=lambda s, d: self.refresh_fitting_windows(),
+                                width=-1,
+                            )
+                        with dpg.group(horizontal=True):
+                            dpg.add_text("".rjust(LABEL_PAD))
+                            dpg.add_combo(
+                                tag="fitting_windows_y_threshold_type",
+                                items=["Absolute", "Relative"],
+                                default_value="Relative",
+                                width=-1,
+                                callback=lambda s, d: self.change_fitting_windows_threshold_type(
+                                    d
+                                ),
                             )
 
                 with dpg.child_window(border=False, width=-1, tag="data"):
                     with dpg.group(horizontal=True):
-                        with dpg.child_window(
-                            label="Fitting results",
-                            tag="fitting_results",
-                            width=400,
-                            height=800,
-                            menubar=True,
-                            show=False,
-                            no_scrollbar=True,
-                        ):
-                            with dpg.menu_bar():
-                                with dpg.menu(label="Fitting results", enabled=False):
-                                    pass
-
                         with dpg.plot(
                             tag="libs_plots",
                             crosshairs=True,
@@ -517,6 +631,7 @@ class UI:
                             query=True,
                             query_button=dpg.mvMouseButton_Left,
                             query_mod=1,
+                            callback=self.plot_query_callback,
                             height=800,
                             width=-1,
                         ):
@@ -570,6 +685,17 @@ class UI:
             width=700,
             height=400,
             no_resize=True,
+        ):
+            pass
+
+        with dpg.window(
+            label="Fitting results",
+            tag="fitting_results",
+            width=400,
+            height=800,
+            menubar=True,
+            show=False,
+            no_scrollbar=True,
         ):
             pass
 
