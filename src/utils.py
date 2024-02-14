@@ -28,6 +28,7 @@ import numpy.typing as npt
 import pyarrow as pa
 from attr import define, field
 from lmfit import Model, Parameters
+from lmfit.model import ModelResult
 from lmfit.models import PseudoVoigtModel, VoigtModel
 from natsort import natsorted
 from pathos.multiprocessing import ProcessingPool as Pool
@@ -242,9 +243,10 @@ class Spectrum:
         default=None, init=False, repr=False
     )
     common_x: npt.NDArray | None = field(default=None, repr=False)
-    fit_result: Any = field(init=False, default=None)
-    peaks: npt.NDArray = field(init=False, factory=lambda: np.array([]))
-    fitting_windows: npt.NDArray = field(init=False, factory=lambda: np.array([]))
+    fit_result: ModelResult | None = field(init=False, default=None)
+    peaks: npt.NDArray | None = field(init=False, default=None)
+    fitting_windows: list[tuple[float, float]] = field(init=False, factory=list)
+    fitted: npt.NDArray | None = field(init=False, default=None)
 
     def __attrs_post_init__(self):
 
@@ -395,26 +397,34 @@ class Spectrum:
 
         self.peaks = np.array([self.x[peaks], y[peaks]]).T
 
-    def _expand_ranges(self, ranges: np.ndarray):
-        for i, rng in enumerate(ranges):
-            if i == 0:
-                rng[0] = self.x.min()
-                mid_x = rng[1] + (ranges[i + 1][0] - rng[1]) / 2
-                rng[1] = nearest(self.x, mid_x)
-            elif i == ranges.shape[0] - 1:
-                rng[0] = ranges[i - 1][1] + self.step
-                rng[1] = self.x.max()
-            else:
-                rng[0] = ranges[i - 1][1] + self.step
-                mid_x = rng[1] + (ranges[i + 1][0] - rng[1]) / 2
-                rng[1] = nearest(self.x, mid_x)
+    def _expand_windows(self, windows: np.ndarray, region: tuple[float, float]):
+        if len(windows) == 1:
+            windows[0][0] = region[0]
+            windows[0][1] = region[1]
+            return windows
 
-        return ranges
+        for i, window in enumerate(windows):
+            if i == 0:
+                window[0] = region[0]
+                mid_x = window[1] + (windows[i + 1][0] - window[1]) / 2
+                window[1] = nearest(self.x, mid_x)
+            elif i == windows.shape[0] - 1:
+                window[0] = windows[i - 1][1] + self.step
+                window[1] = region[1]
+            else:
+                window[0] = windows[i - 1][1] + self.step
+                mid_x = window[1] + (windows[i + 1][0] - window[1]) / 2
+                window[1] = nearest(self.x, mid_x)
+
+        return windows
 
     def fit_window(
         self, window: tuple[float, float], max_iterations: int | None = None
     ):
-        self.find_peaks()
+        if self.peaks is None:
+            self.find_peaks()
+            assert isinstance(self.peaks, np.ndarray)
+
         peaks_xy = self.peaks
 
         x_min, x_max = window[0] - self.step * 0.5, window[1]
@@ -459,25 +469,40 @@ class Spectrum:
 
     def generate_fitting_windows(
         self,
+        region: tuple[float, float],
         x_threshold=8.000,
         y_threshold=0.001,
         threshold_type: Literal["Relative", "Absolute"] = "Relative",
     ):
-        self.find_peaks()
-        peak_x_diffs = np.diff(self.peaks[:, 0])
+        if self.peaks is None:
+            self.find_peaks()
+            assert isinstance(self.peaks, np.ndarray)
+
+        if len(self.peaks) == 0:
+            self.fitting_windows = []
+
+        region_min, region_max = region
+
+        selected_peaks = self.peaks[
+            np.logical_and(
+                self.peaks[:, 0] >= region_min, self.peaks[:, 0] <= region_max
+            )
+        ]
+
+        peak_x_diffs = np.diff(selected_peaks[:, 0])
         x_split_ids = [
             np.where(np.isclose(peak_x_diffs, v))[0][0] + 1
             for v in peak_x_diffs[peak_x_diffs > x_threshold]
         ]
 
-        peak_ids = {0, *x_split_ids, len(self.peaks)}
+        peak_ids = {0, *x_split_ids, len(selected_peaks)}
 
         while True:
             peak_ids_init = peak_ids.copy()
             peak_split_ids = sorted(list(peak_ids))
             for i, j in zip(peak_split_ids, peak_split_ids[1:]):
-                if self.peaks[i:j][:, 0].size > 1:
-                    peak_win_x = self.peaks[i:j][:, 0]
+                if selected_peaks[i:j][:, 0].size > 1:
+                    peak_win_x = selected_peaks[i:j][:, 0]
                     x_min, x_max = peak_win_x.min(), peak_win_x.max()
                     win_x = self.x[np.logical_and(self.x >= x_min, self.x <= x_max)]
                     win_y = self.y[np.logical_and(self.x >= x_min, self.x <= x_max)]
@@ -489,13 +514,13 @@ class Spectrum:
                         mask = win_y / y_max <= y_threshold
                     for x in win_x[mask]:
                         split_peak_i = np.searchsorted(
-                            self.peaks[:, 0],
+                            selected_peaks[:, 0],
                             [
                                 x,
                             ],
                             side="left",
                         )[0]
-                        if self.peaks[split_peak_i][0] >= x_min:
+                        if selected_peaks[split_peak_i][0] >= x_min:
                             peak_ids.add(split_peak_i)
 
             if len(peak_ids) == len(peak_ids_init):
@@ -503,12 +528,21 @@ class Spectrum:
 
         final_split_ids = sorted(list(peak_ids))[1:-1]
 
-        partitioned_peaks = partition(self.peaks, final_split_ids)
+        partitioned_peaks = partition(selected_peaks, final_split_ids)
+
+        if len(partitioned_peaks) == 0:
+            self.fitting_windows = []
+            return
+
+        if len(partitioned_peaks[0]) == 0:
+            self.fitting_windows = []
+            return
+
         partitioned_ranges = np.array(
             [[np.min(i[:, 0]), np.max(i[:, 0])] for i in partitioned_peaks]
         )
 
-        windows = self._expand_ranges(partitioned_ranges)
+        windows = self._expand_windows(partitioned_ranges, region)
 
         # ensure window size >= 4 x steps
         small_ids = {
@@ -519,11 +553,40 @@ class Spectrum:
 
         for i in small_ids.copy():
             if i in small_ids:
-                windows[i, 1] = windows[i + 1, 1]
-                windows = np.delete(windows, i + 1, axis=0)
-                small_ids.discard(i)
+                try:
+                    windows[i, 1] = windows[i + 1, 1]
+                    windows = np.delete(windows, i + 1, axis=0)
+                    small_ids.discard(i)
+                except IndexError:
+                    pass
 
-        self.fitting_windows = windows
+        self.fitting_windows = windows.tolist()
+
+    @log_exec_time
+    @partial(loading_indicator, message="Fitting series")
+    def fit_windows_parallel(self, windows: list[tuple[float, float]]):
+        if len(windows) == 0:
+            return
+
+        with Pool(processes=CPU_COUNT) as pool:
+            result = pool.amap(self.fit_window, windows)
+            while not result.ready():
+                yield (1 - result._number_left / len(self.fitting_windows)) * 100
+                time.sleep(0.01)
+
+                if dpg.is_key_down(dpg.mvKey_Escape):
+                    return
+
+            fitted_y = result.get()
+
+        x = self.x[
+            np.logical_and(
+                self.x >= windows[0][0] - 0.5 * self.step, self.x <= windows[-1][1]
+            )
+        ]
+        y = np.concatenate(fitted_y)
+        print(x.size, y.size)
+        self.fitted = np.array([x, y]).T
 
 
 @define
@@ -581,6 +644,7 @@ class Project:
     series_dirs: list[Path] = field(init=False, factory=list)
     series: Mapping[str, Series] = field(init=False, factory=list)
     plotted_series_ids: set[str] = field(init=False, default=set())
+    plot_query: list[float] | None = field(init=False, default=None)
 
     def __attrs_post_init__(self):
         self.validate_directory()
@@ -598,6 +662,13 @@ class Project:
             raise ValueError
 
         self.series_dirs = possible_series_dirs
+
+    @property
+    def query_window(self):
+        if self.plot_query is None:
+            return (0.0, 0.0)
+        else:
+            return (self.plot_query[0], self.plot_query[1])
 
     @log_exec_time
     @partial(loading_indicator, message="Loading series")

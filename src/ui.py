@@ -1,5 +1,6 @@
 import gc
 import logging
+from functools import partial
 from operator import call
 from pathlib import Path
 from re import L
@@ -108,6 +109,7 @@ class UI:
         dpg.configure_item("libs_plots", pan_button=dpg.mvMouseButton_Left)
         if not dpg.is_plot_queried("libs_plots"):
             dpg.set_value("plot_selected_region_text", "None")
+            self.refresh_fitting_windows()
 
     def on_key_ctrl_down(self):
         dpg.configure_item("libs_plots", pan_button=dpg.mvMouseButton_Middle)
@@ -249,13 +251,37 @@ class UI:
 
         self.show_libs_plots()
         self.refresh_fitting_windows()
+        self.refresh_peaks()
 
     def perform_fit(self):
-        dpg.show_item("fitting_results")
+        spectrum = list(self.project.series.values())[0].averaged
+        if self.project.plot_query is None:
+            window = (spectrum.x.min(), spectrum.x.max())
+        else:
+            window = self.project.query_window
+
+        x_threshold = dpg.get_value("fitting_windows_x_threshold")
+        y_threshold = dpg.get_value("fitting_windows_y_threshold")
+        threshold_type = dpg.get_value("fitting_windows_y_threshold_type")
+
+        spectrum.generate_fitting_windows(
+            window,
+            x_threshold=x_threshold,
+            y_threshold=y_threshold,
+            threshold_type=threshold_type,
+        )
+
+        spectrum.fit_windows_parallel(spectrum.fitting_windows)
 
     def plot_query_callback(self, sender, data):
+        if data == self.project.plot_query:
+            return
+
+        self.project.plot_query = data
         region = f"{(data[0]):.2f}..{(data[1]):.2f} nm"
         dpg.set_value("plot_selected_region_text", region)
+        with dpg.mutex():
+            self.refresh_fitting_windows()
 
     def window_resize_callback(self, _sender=None, _data=None):
         w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
@@ -273,32 +299,79 @@ class UI:
             with dpg.mutex():
                 for id, s in enumerate(selected_series):
                     spectrum = s.averaged
+                    if dpg.is_plot_queried("libs_plots"):
+                        window = self.project.query_window
+                    else:
+                        window = spectrum.x.min(), spectrum.x.max()
+
                     x_threshold = dpg.get_value("fitting_windows_x_threshold")
                     y_threshold = dpg.get_value("fitting_windows_y_threshold")
                     threshold_type = dpg.get_value("fitting_windows_y_threshold_type")
                     spectrum.generate_fitting_windows(
+                        window,
                         x_threshold=x_threshold,
                         y_threshold=y_threshold,
                         threshold_type=threshold_type,
                     )
-                    windows = spectrum.fitting_windows
-                    x, _ = windows.T.tolist()
+                    if len(spectrum.fitting_windows) >= 1:
+                        win_starts = [w[0] for w in spectrum.fitting_windows]
+                        reg_end = spectrum.fitting_windows[-1][1]
 
-                    assert s.color
+                        assert s.color
 
-                    for i, e in enumerate(x):
+                        for i, e in enumerate(win_starts):
+                            dpg.add_drag_line(
+                                color=s.color,
+                                default_value=e,
+                                parent="libs_plots",
+                                label=f"{s.name}_fitting_window_{i}",
+                                tag=f"{s.id}_fitting_window_{i}",
+                            )
+
                         dpg.add_drag_line(
                             color=s.color,
-                            default_value=e,
+                            default_value=reg_end,
                             parent="libs_plots",
-                            label=f"{s.name}_fitting_window_{i}",
-                            tag=f"{s.id}_fitting_window_{i}",
+                            label=f"{s.name}_fitting_window_end",
+                            tag=f"{s.id}_fitting_window_end",
+                        )
+
+    def toggle_peaks(self, state: bool):
+        if not state:
+            dpg.delete_item("libs_plots", children_only=True, slot=0)
+
+        else:
+            selected_series = [s for s in self.project.series.values() if s.selected]
+            selected_series = natsorted(selected_series, key=lambda s: s.name)
+            with dpg.mutex():
+                for id, s in enumerate(selected_series):
+                    spectrum = s.averaged
+                    if dpg.is_plot_queried("libs_plots"):
+                        window = self.project.query_window
+                    else:
+                        window = spectrum.x.min(), spectrum.x.max()
+                    spectrum.find_peaks()
+                    assert isinstance(spectrum.peaks, np.ndarray)
+                    peaks = spectrum.peaks
+                    assert s.color
+                    for i, peak in enumerate(peaks):
+                        dpg.add_drag_point(
+                            color=s.color,
+                            default_value=(peak[0], peak[1]),
+                            parent="libs_plots",
+                            label=f"{s.name}_peak_{i}",
+                            tag=f"{s.id}_peak_{i}",
                         )
 
     def refresh_fitting_windows(self):
         if dpg.get_value("toggle_fitting_windows_checkbox"):
             self.toggle_fitting_windows(False)
             self.toggle_fitting_windows(True)
+
+    def refresh_peaks(self):
+        if dpg.get_value("toggle_peaks_checkbox"):
+            self.toggle_peaks(False)
+            self.toggle_peaks(True)
 
     def change_fitting_windows_threshold_type(self, t_type):
         if t_type == "Absolute":
@@ -569,6 +642,13 @@ class UI:
                             dpg.add_text("None", tag="plot_selected_region_text")
 
                         with dpg.group(horizontal=True):
+                            dpg.add_text("Subdivide selected".rjust(LABEL_PAD))
+                            dpg.add_checkbox(
+                                default_value=False,
+                            )
+
+                        with dpg.group(horizontal=True):
+                            dpg.add_text("".rjust(LABEL_PAD))
                             dpg.add_button(
                                 label="Fit region",
                                 callback=lambda s, d: self.perform_fit(),
@@ -581,6 +661,15 @@ class UI:
                                 default_value=False,
                                 tag="toggle_fitting_windows_checkbox",
                                 callback=lambda s, d: self.toggle_fitting_windows(d),
+                            )
+                        with dpg.group(horizontal=True):
+                            dpg.add_text(
+                                "Show peaks".rjust(LABEL_PAD),
+                            )
+                            dpg.add_checkbox(
+                                default_value=False,
+                                tag="toggle_peaks_checkbox",
+                                callback=lambda s, d: self.toggle_peaks(d),
                             )
                         with dpg.group(horizontal=True):
                             dpg.add_text(
@@ -691,13 +780,14 @@ class UI:
         with dpg.window(
             label="Fitting results",
             tag="fitting_results",
-            width=400,
-            height=800,
+            width=800,
+            height=600,
             menubar=True,
             show=False,
             no_scrollbar=True,
+            autosize=True,
         ):
-            pass
+            dpg.add_text(tag="fitting_results_text")
 
         w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
         with dpg.window(
