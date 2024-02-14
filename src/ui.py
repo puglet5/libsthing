@@ -31,7 +31,7 @@ class UI:
     def __attrs_post_init__(self):
         dpg.create_context()
         dpg.create_viewport(title="hsistat", width=1920, height=1080, vsync=True)
-        dpg.configure_app(wait_for_input=False)
+        dpg.configure_app(wait_for_input=False, manual_callback_management=True)
         self.setup_themes()
         self.bind_themes()
         self.setup_handler_registries()
@@ -46,7 +46,10 @@ class UI:
         try:
             if dev:
                 dpg.set_frame_callback(1, self.setup_dev)
-            dpg.start_dearpygui()
+            while dpg.is_dearpygui_running():
+                jobs = dpg.get_callback_queue()  # retrieves and clears queue
+                dpg.run_callbacks(jobs)
+                dpg.render_dearpygui_frame()
         except Exception as e:
             logger.fatal(e)
         finally:
@@ -115,8 +118,7 @@ class UI:
     def on_key_ctrl_down(self):
         dpg.configure_item("libs_plots", pan_button=dpg.mvMouseButton_Middle)
         if dpg.is_key_pressed(dpg.mvKey_Q):
-            dpg.stop_dearpygui()
-            dpg.destroy_context()
+            self.stop()
 
     def bind_item_handlers(self):
         dpg.bind_item_handler_registry(self.window, "window_resize_handler")
@@ -268,7 +270,7 @@ class UI:
 
         if dpg.get_value("selection_mode_combo") == "Select":
             self.project.series[clicked_series_id].selected = state
-        
+
         if dpg.get_value("selection_mode_combo") == "Single":
             for series_id in self.project.series:
                 dpg.set_value(f"{series_id}_selectable", False)
@@ -303,7 +305,11 @@ class UI:
             )
         else:
             spectrum.fitting_windows = [region]
-        spectrum.fit_windows_parallel(spectrum.fitting_windows)
+
+        max_iterations = dpg.get_value("max_fit_iterations")
+        spectrum.fit_windows_parallel(
+            spectrum.fitting_windows, max_iterations=max_iterations
+        )
         if isinstance(spectrum.fitted, np.ndarray):
             x, y = spectrum.fitted.T.tolist()
             dpg.add_line_series(
@@ -403,7 +409,16 @@ class UI:
                     else:
                         window = spectrum.x.min(), spectrum.x.max()
 
-                    spectrum.find_peaks(window)
+                    height = dpg.get_value("peak_height_threshold_slider")
+                    prominance = dpg.get_value("peak_prominance_threshold_slider")
+                    sigma = dpg.get_value("peak_smoothing_sigma_slider")
+
+                    spectrum.find_peaks(
+                        window,
+                        height=height,
+                        prominance=prominance,
+                        smoothing_sigma=sigma,
+                    )
                     assert isinstance(spectrum.peaks, np.ndarray)
                     peaks = spectrum.peaks
                     assert s.color
@@ -435,6 +450,10 @@ class UI:
                 dpg.set_value("fitting_windows_y_threshold", 0.1)
 
         self.refresh_fitting_windows()
+
+    def refresh_all(self):
+        self.refresh_fitting_windows()
+        self.refresh_peaks()
 
     def setup_layout(self):
         with dpg.window(
@@ -654,6 +673,43 @@ class UI:
                                 callback=lambda _s, _d: self.show_libs_plots(),
                             )
 
+                        with dpg.group(horizontal=True):
+                            dpg.add_text("Min peak height".rjust(LABEL_PAD))
+                            dpg.add_slider_float(
+                                default_value=0.01,
+                                min_value=0,
+                                max_value=0.2,
+                                format="%.3f",
+                                clamped=True,
+                                tag="peak_height_threshold_slider",
+                                callback=lambda s, d: self.refresh_all(),
+                                width=-1,
+                            )
+                        with dpg.group(horizontal=True):
+                            dpg.add_text("Min peak prominance".rjust(LABEL_PAD))
+                            dpg.add_slider_float(
+                                default_value=0.01,
+                                min_value=0,
+                                max_value=0.2,
+                                format="%.3f",
+                                clamped=True,
+                                tag="peak_prominance_threshold_slider",
+                                callback=lambda s, d: self.refresh_all(),
+                                width=-1,
+                            )
+                        with dpg.group(horizontal=True):
+                            dpg.add_text("Peak smoothing sigma".rjust(LABEL_PAD))
+                            dpg.add_slider_float(
+                                default_value=1,
+                                min_value=0.0,
+                                max_value=2,
+                                format="%.3f",
+                                clamped=True,
+                                tag="peak_smoothing_sigma_slider",
+                                callback=lambda s, d: self.refresh_all(),
+                                width=-1,
+                            )
+
                     with dpg.child_window(
                         label="Series",
                         width=-1,
@@ -763,6 +819,16 @@ class UI:
                                 callback=lambda s, d: self.change_fitting_windows_threshold_type(
                                     d
                                 ),
+                            )
+
+                        with dpg.group(horizontal=True):
+                            dpg.add_text("Max fit iterations".rjust(LABEL_PAD))
+                            dpg.add_input_int(
+                                tag="max_fit_iterations",
+                                default_value=-1,
+                                min_value=-1,
+                                width=-1,
+                                min_clamped=True,
                             )
 
                 with dpg.child_window(border=False, width=-1, tag="data"):

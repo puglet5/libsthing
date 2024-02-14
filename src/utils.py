@@ -393,7 +393,9 @@ class Spectrum:
     def find_peaks(
         self,
         region: Window | None = None,
-        height=None,
+        height=0.005,
+        prominance=0.001,
+        smoothing_sigma=1,
         y: npt.NDArray | None = None,
     ):
         if not isinstance(y, np.ndarray):
@@ -410,13 +412,12 @@ class Spectrum:
             self.peaks = np.array([])
             return
 
-        y_spl_der = -1 * UnivariateSpline(x, y, s=0, k=2).derivative(2)(x)
-        y_spl_der = np.clip(gaussian_filter1d(y_spl_der, 1), 0, None)
+        y_spl_der = -UnivariateSpline(x, y, s=0, k=2).derivative(2)(x)  # type:ignore
+        if smoothing_sigma != 0:
+            y_spl_der = np.clip(gaussian_filter1d(y_spl_der, smoothing_sigma), 0, None)
 
-        if height is None:
-            height = 0.005 * y_spl_der.max()
-
-        prominance = 0.001 * y_spl_der.max()
+        height = height * y_spl_der.max()
+        prominance = prominance * y_spl_der.max()
 
         peaks = find_peaks(
             y_spl_der,
@@ -488,9 +489,10 @@ class Spectrum:
         return windows
 
     def fit_window(self, window: Window, max_iterations: int | None = None):
-        if self.peaks is None:
-            self.find_peaks()
-            assert isinstance(self.peaks, np.ndarray)
+        assert isinstance(self.peaks, np.ndarray)
+
+        if max_iterations == -1:
+            max_iterations = None
 
         peaks_xy = self.peaks
 
@@ -517,7 +519,7 @@ class Spectrum:
         for peak in selected_peaks:
             peak.estimate_params(win_x, win_y)
             params.add(f"{peak.prefix}sigma", min=0.1, max=2, value=peak.sigma)
-            params.add(f"{peak.prefix}amplitude", min=10, value=peak.amplitude)
+            params.add(f"{peak.prefix}amplitude", min=0, value=peak.amplitude)
             params.add(f"{peak.prefix}fraction", min=0, max=1, value=0.5)
             params.add(
                 f"{peak.prefix}center",
@@ -632,27 +634,41 @@ class Spectrum:
 
     @log_exec_time
     @partial(loading_indicator, message="Fitting series")
-    def fit_windows_parallel(self, windows: Windows):
+    def fit_windows_parallel(self, windows: Windows, max_iterations):
         if len(windows) == 0:
             return
 
         with Pool(processes=CPU_COUNT) as pool:
-            result = pool.amap(self.fit_window, windows)
-            while not result.ready():
-                yield (1 - result._number_left / len(windows)) * 100
-                time.sleep(0.01)
+            pool.restart()
+            try:
+                fitting_func = partial(self.fit_window, max_iterations=max_iterations)
+                result = pool.amap(fitting_func, windows)
+                while not result.ready():
+                    yield (1 - result._number_left / len(windows)) * 100
+                    time.sleep(0.01)
 
-                if dpg.is_key_down(dpg.mvKey_Escape):
-                    return
+                    if dpg.is_key_down(dpg.mvKey_Escape):
+                        return
 
-            fitted_y = result.get()
+                fitted_y = result.get()
+            except Exception as e:
+                logger.exception(f"Error while fitting: {e}")
+            finally:
+                pool.close()
+                pool.join()
 
         x = self.x[
             np.logical_and(
                 self.x >= windows[0][0] - 0.5 * self.step, self.x <= windows[-1][1]
             )
         ]
-        y = np.concatenate(fitted_y)
+
+        try:
+            y = np.concatenate(fitted_y)
+        except ValueError as e:
+            logger.error(f"Fitting result error: {e}")
+            return
+
         self.fitted = np.array([x, y]).T
 
 
@@ -752,6 +768,7 @@ class Project:
     @partial(loading_indicator, message="Loading series")
     def load_series(self):
         with Pool(processes=CPU_COUNT) as pool:
+            pool.restart()
             try:
                 result = pool.amap(Series, self.series_dirs, chunksize=1)
                 while not result.ready():
@@ -763,3 +780,6 @@ class Project:
             except Exception as e:
                 logger.error(e)
                 raise ValueError from e
+            finally:
+                pool.close()
+                pool.join()
