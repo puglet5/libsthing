@@ -144,6 +144,9 @@ class UI:
             return
 
         self.show_libs_plots()
+        self.toggle_series_list(dpg.get_value("selection_mode_combo"))
+        dpg.fit_axis_data("libs_x_axis")
+        dpg.fit_axis_data("libs_y_axis")
 
     def directory_picker_callback(self, _sender, data):
         dpg.set_value("project_directory", data["file_path_name"])
@@ -163,11 +166,8 @@ class UI:
             dpg.get_value("normalize_to"),
         )
 
-        selected_series = [s for s in self.project.series.values() if s.selected]
-        selected_series = natsorted(selected_series, key=lambda s: s.name)
-
         with dpg.mutex():
-            for id, s in enumerate(selected_series):
+            for id, s in enumerate(self.project.selected_series):
                 spectrum = s.averaged
                 assert spectrum.raw_spectral_data is not None
                 spectrum.process_spectral_data(
@@ -222,7 +222,7 @@ class UI:
 
             for s in self.project.series.values():
                 if s.id in self.project.plotted_series_ids and not s.id in [
-                    s.id for s in selected_series
+                    s.id for s in self.project.selected_series
                 ]:
                     self.project.plotted_series_ids.discard(s.id)
                     dpg.delete_item(f"series_plot_{s.id}")
@@ -234,13 +234,28 @@ class UI:
         dpg.delete_item("series_list_wrapper", children_only=True)
         if state == "Select":
             for s in self.project.series.values():
-                dpg.add_selectable(
-                    label=str(s.name).rjust(LABEL_PAD + 5),
-                    parent="series_list_wrapper",
-                    default_value=s.selected,
-                    user_data=s.id,
-                    callback=lambda s, d: self.toggle_series_selection(s, d),
-                )
+                with dpg.group(horizontal=True, parent="series_list_wrapper"):
+                    dpg.add_text("".ljust(LABEL_PAD))
+                    dpg.add_selectable(
+                        label=f"{s.name}",
+                        tag=f"{s.id}_selectable",
+                        default_value=s.selected,
+                        user_data=s.id,
+                        callback=lambda s, d: self.toggle_series_selection(s, d),
+                    )
+
+        if state == "Single":
+            for s in self.project.series.values():
+                s.selected = False
+                with dpg.group(horizontal=True, parent="series_list_wrapper"):
+                    dpg.add_text("".ljust(LABEL_PAD))
+                    dpg.add_selectable(
+                        label=f"{s.name}",
+                        default_value=s.selected,
+                        tag=f"{s.id}_selectable",
+                        user_data=s.id,
+                        callback=lambda s, d: self.toggle_series_selection(s, d),
+                    )
 
         if state == "All":
             for s in self.project.series.values():
@@ -248,34 +263,55 @@ class UI:
         self.show_libs_plots()
 
     def toggle_series_selection(self, sender, state: bool):
-        id = dpg.get_item_user_data(sender)
-        assert isinstance(id, str)
+        clicked_series_id = dpg.get_item_user_data(sender)
+        assert isinstance(clicked_series_id, str)
 
-        self.project.series[id].selected = state
+        if dpg.get_value("selection_mode_combo") == "Select":
+            self.project.series[clicked_series_id].selected = state
+        
+        if dpg.get_value("selection_mode_combo") == "Single":
+            for series_id in self.project.series:
+                dpg.set_value(f"{series_id}_selectable", False)
+
+            for s in self.project.series.values():
+                s.selected = False
+
+            self.project.series[clicked_series_id].selected = True
+            dpg.set_value(sender, True)
 
         self.show_libs_plots()
         self.refresh_fitting_windows()
         self.refresh_peaks()
 
     def perform_fit(self):
-        spectrum = list(self.project.series.values())[0].averaged
-        if self.project.plot_query is None:
-            window = (spectrum.x.min(), spectrum.x.max())
-        else:
-            window = self.project.query_window
-
+        spectrum = self.project.selected_series[0].averaged
         x_threshold = dpg.get_value("fitting_windows_x_threshold")
         y_threshold = dpg.get_value("fitting_windows_y_threshold")
         threshold_type = dpg.get_value("fitting_windows_y_threshold_type")
+        subdivide = dpg.get_value("subdivide_selection_window_checkbox")
+        if dpg.is_plot_queried("libs_plots"):
+            region = self.project.query_window
+        else:
+            region = spectrum.x.min(), spectrum.x.max()
 
-        spectrum.generate_fitting_windows(
-            window,
-            x_threshold=x_threshold,
-            y_threshold=y_threshold,
-            threshold_type=threshold_type,
-        )
-
+        if subdivide:
+            spectrum.generate_fitting_windows(
+                region,
+                x_threshold=x_threshold,
+                y_threshold=y_threshold,
+                threshold_type=threshold_type,
+            )
+        else:
+            spectrum.fitting_windows = [region]
         spectrum.fit_windows_parallel(spectrum.fitting_windows)
+        if isinstance(spectrum.fitted, np.ndarray):
+            x, y = spectrum.fitted.T.tolist()
+            dpg.add_line_series(
+                x,
+                y,
+                parent="libs_y_axis",
+                label=f"Fitted",
+            )
 
     def plot_query_callback(self, sender, data):
         if data == self.project.plot_query:
@@ -303,47 +339,50 @@ class UI:
                     dpg.delete_item(peak)
 
         else:
-            selected_series = [s for s in self.project.series.values() if s.selected]
-            selected_series = natsorted(selected_series, key=lambda s: s.name)
-
             with dpg.mutex():
-                for id, s in enumerate(selected_series):
-                    spectrum = s.averaged
+                for series_id, series in enumerate(self.project.selected_series):
+                    spectrum = series.averaged
                     if dpg.is_plot_queried("libs_plots"):
-                        window = self.project.query_window
+                        region = self.project.query_window
                     else:
-                        window = spectrum.x.min(), spectrum.x.max()
+                        region = spectrum.x.min(), spectrum.x.max()
 
                     x_threshold = dpg.get_value("fitting_windows_x_threshold")
                     y_threshold = dpg.get_value("fitting_windows_y_threshold")
                     threshold_type = dpg.get_value("fitting_windows_y_threshold_type")
-                    spectrum.generate_fitting_windows(
-                        window,
-                        x_threshold=x_threshold,
-                        y_threshold=y_threshold,
-                        threshold_type=threshold_type,
-                    )
+                    subdivide = dpg.get_value("subdivide_selection_window_checkbox")
+
+                    if subdivide:
+                        spectrum.generate_fitting_windows(
+                            region,
+                            x_threshold=x_threshold,
+                            y_threshold=y_threshold,
+                            threshold_type=threshold_type,
+                        )
+                    else:
+                        spectrum.fitting_windows = [region]
+
                     if len(spectrum.fitting_windows) >= 1:
                         win_starts = [w[0] for w in spectrum.fitting_windows]
                         reg_end = spectrum.fitting_windows[-1][1]
 
-                        assert s.color
+                        assert series.color
 
                         for i, e in enumerate(win_starts):
                             dpg.add_drag_line(
-                                color=s.color,
+                                color=series.color,
                                 default_value=e,
                                 parent="libs_plots",
-                                label=f"{s.name}_fitting_window_{i}",
-                                tag=f"{s.id}_fitting_window_{i}",
+                                label=f"{series.name}_fitting_window_{i}",
+                                tag=f"{series.id}_fitting_window_{i}",
                             )
 
                         dpg.add_drag_line(
-                            color=s.color,
+                            color=series.color,
                             default_value=reg_end,
                             parent="libs_plots",
-                            label=f"{s.name}_fitting_window_end",
-                            tag=f"{s.id}_fitting_window_end",
+                            label=f"{series.name}_fitting_window_end",
+                            tag=f"{series.id}_fitting_window_end",
                         )
 
     def toggle_peaks(self, state: bool):
@@ -356,10 +395,8 @@ class UI:
                     dpg.delete_item(peak)
 
         else:
-            selected_series = [s for s in self.project.series.values() if s.selected]
-            selected_series = natsorted(selected_series, key=lambda s: s.name)
             with dpg.mutex():
-                for id, s in enumerate(selected_series):
+                for id, s in enumerate(self.project.selected_series):
                     spectrum = s.averaged
                     if dpg.is_plot_queried("libs_plots"):
                         window = self.project.query_window
@@ -572,7 +609,7 @@ class UI:
                             dpg.add_text("Always fit to axes".rjust(LABEL_PAD))
                             dpg.add_checkbox(
                                 tag="fit_to_axes",
-                                default_value=True,
+                                default_value=False,
                                 callback=lambda _s, _d: self.show_libs_plots(),
                             )
 
@@ -634,6 +671,7 @@ class UI:
                                 items=["All", "Select", "Single"],
                                 default_value="All",
                                 width=-1,
+                                tag="selection_mode_combo",
                                 callback=lambda s, d: self.toggle_series_list(d),
                             )
 
@@ -658,15 +696,15 @@ class UI:
                             dpg.add_text("None", tag="plot_selected_region_text")
 
                         with dpg.group(horizontal=True):
-                            dpg.add_text("Subdivide selected".rjust(LABEL_PAD))
+                            dpg.add_text("Subdivide region".rjust(LABEL_PAD))
                             dpg.add_checkbox(
-                                default_value=False,
+                                tag="subdivide_selection_window_checkbox",
+                                default_value=True,
+                                callback=lambda s, d: self.refresh_fitting_windows(),
                             )
-
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("".rjust(LABEL_PAD))
                             dpg.add_button(
-                                label="Fit region",
+                                label="Fit",
+                                width=-1,
                                 callback=lambda s, d: self.perform_fit(),
                             )
                         with dpg.group(horizontal=True):

@@ -173,6 +173,8 @@ def nearest_floor(arr: np.ndarray, val: float):
 def nearest(arr: np.ndarray, val: float):
     return arr.flat[np.abs(arr - val).argmin()]
 
+Window = tuple[float, float]
+Windows = list[Window]
 
 @define
 class Peak:
@@ -261,7 +263,7 @@ class Spectrum:
     common_x: npt.NDArray | None = field(default=None, repr=False)
     fit_result: ModelResult | None = field(init=False, default=None)
     peaks: npt.NDArray | None = field(init=False, default=None)
-    fitting_windows: list[tuple[float, float]] = field(init=False, factory=list)
+    fitting_windows: Windows = field(init=False, factory=list)
     fitted: npt.NDArray | None = field(init=False, default=None)
 
     def __attrs_post_init__(self):
@@ -348,7 +350,7 @@ class Spectrum:
     def process_spectral_data(
         self,
         normalized=False,
-        normalization_range: tuple[float, float] = (1, -1),
+        normalization_range: Window = (1, -1),
         baseline_clip=True,
         baseline_removal: Literal[
             "None", "SNIP", "Adaptive minmax", "Polynomial"
@@ -390,7 +392,7 @@ class Spectrum:
 
     def find_peaks(
         self,
-        region: tuple[float, float] | None = None,
+        region: Window | None = None,
         height=None,
         y: npt.NDArray | None = None,
     ):
@@ -404,7 +406,11 @@ class Spectrum:
         x = self.x[np.logical_and(self.x >= region[0], self.x <= region[1])]
         y = y[np.logical_and(self.x >= region[0], self.x <= region[1])]
 
-        y_spl_der = -UnivariateSpline(x, y, s=0, k=2).derivative(2)(x)  # type: ignore
+        if len(x) <= 4:
+            self.peaks = np.array([])
+            return
+
+        y_spl_der = -1 * UnivariateSpline(x, y, s=0, k=2).derivative(2)(x)
         y_spl_der = np.clip(gaussian_filter1d(y_spl_der, 1), 0, None)
 
         if height is None:
@@ -420,7 +426,7 @@ class Spectrum:
 
         self.peaks = np.array([x[peaks], y[peaks]]).T
 
-    def _expand_windows(self, windows: np.ndarray, region: tuple[float, float]):
+    def _expand_windows(self, windows: np.ndarray, region: Window):
         if len(windows) == 1:
             windows[0][0] = region[0]
             windows[0][1] = region[1]
@@ -481,9 +487,7 @@ class Spectrum:
 
         return windows
 
-    def fit_window(
-        self, window: tuple[float, float], max_iterations: int | None = None
-    ):
+    def fit_window(self, window: Window, max_iterations: int | None = None):
         if self.peaks is None:
             self.find_peaks()
             assert isinstance(self.peaks, np.ndarray)
@@ -532,7 +536,7 @@ class Spectrum:
 
     def generate_fitting_windows(
         self,
-        region: tuple[float, float],
+        region: Window,
         x_threshold=8.000,
         y_threshold=0.001,
         threshold_type: Literal["Relative", "Absolute"] = "Relative",
@@ -542,7 +546,8 @@ class Spectrum:
             assert isinstance(self.peaks, np.ndarray)
 
         if len(self.peaks) == 0:
-            self.fitting_windows = []
+            self.fitting_windows = [region]
+            return
 
         region_min, region_max = region
 
@@ -627,14 +632,14 @@ class Spectrum:
 
     @log_exec_time
     @partial(loading_indicator, message="Fitting series")
-    def fit_windows_parallel(self, windows: list[tuple[float, float]]):
+    def fit_windows_parallel(self, windows: Windows):
         if len(windows) == 0:
             return
 
         with Pool(processes=CPU_COUNT) as pool:
             result = pool.amap(self.fit_window, windows)
             while not result.ready():
-                yield (1 - result._number_left / len(self.fitting_windows)) * 100
+                yield (1 - result._number_left / len(windows)) * 100
                 time.sleep(0.01)
 
                 if dpg.is_key_down(dpg.mvKey_Escape):
@@ -679,6 +684,7 @@ class Series:
     id: str = field(init=False, default=0)
     selected: bool = field(init=False, default=True)
     color: list[int] | None = field(init=False, default=None)
+    _averaged: Spectrum | None = field(init=False, default=None)
 
     def __attrs_post_init__(self):
         self.id = str(uuid.uuid4())
@@ -692,12 +698,16 @@ class Series:
         if self.name is None:
             self.name = "_".join([self.directory.parent.name, self.directory.name])
 
-    @cached_property
+    @property
     def averaged(self):
-        spectra: list[Spectrum] = flatten([s.spectra for s in self.samples])
-        data = np.array([s.raw_spectral_data for s in spectra])
-        spectrum = Spectrum.from_data(data.mean(axis=0))
-        return spectrum
+        if self._averaged is None:
+            spectra: list[Spectrum] = flatten([s.spectra for s in self.samples])
+            data = np.array([s.raw_spectral_data for s in spectra])
+            spectrum = Spectrum.from_data(data.mean(axis=0))
+            self._averaged = spectrum
+            return spectrum
+        else:
+            return self._averaged
 
 
 @define
@@ -724,6 +734,12 @@ class Project:
             raise ValueError
 
         self.series_dirs = possible_series_dirs
+
+    @property
+    def selected_series(self):
+        selected_series = [s for s in self.series.values() if s.selected]
+        selected_series = natsorted(selected_series, key=lambda s: s.name)
+        return selected_series
 
     @property
     def query_window(self):
