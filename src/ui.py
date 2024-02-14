@@ -109,6 +109,7 @@ class UI:
         dpg.configure_item("libs_plots", pan_button=dpg.mvMouseButton_Left)
         if not dpg.is_plot_queried("libs_plots"):
             dpg.set_value("plot_selected_region_text", "None")
+            self.refresh_peaks()
             self.refresh_fitting_windows()
 
     def on_key_ctrl_down(self):
@@ -226,6 +227,9 @@ class UI:
                     self.project.plotted_series_ids.discard(s.id)
                     dpg.delete_item(f"series_plot_{s.id}")
 
+        self.refresh_fitting_windows()
+        self.refresh_peaks()    
+
     def toggle_series_list(self, state):
         dpg.delete_item("series_list_wrapper", children_only=True)
         if state == "Select":
@@ -282,6 +286,7 @@ class UI:
         dpg.set_value("plot_selected_region_text", region)
         with dpg.mutex():
             self.refresh_fitting_windows()
+            self.refresh_peaks()
 
     def window_resize_callback(self, _sender=None, _data=None):
         w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
@@ -290,7 +295,12 @@ class UI:
 
     def toggle_fitting_windows(self, state: bool):
         if not state:
-            dpg.delete_item("libs_plots", children_only=True, slot=0)
+            peaks = dpg.get_item_children("libs_plots", slot=0)
+            if peaks is None:
+                return
+            for peak in peaks:
+                if dpg.get_item_type(peak) == "mvAppItemType::mvDragLine":
+                    dpg.delete_item(peak)
 
         else:
             selected_series = [s for s in self.project.series.values() if s.selected]
@@ -338,7 +348,12 @@ class UI:
 
     def toggle_peaks(self, state: bool):
         if not state:
-            dpg.delete_item("libs_plots", children_only=True, slot=0)
+            peaks = dpg.get_item_children("libs_plots", slot=0)
+            if peaks is None:
+                return
+            for peak in peaks:
+                if dpg.get_item_type(peak) == "mvAppItemType::mvDragPoint":
+                    dpg.delete_item(peak)
 
         else:
             selected_series = [s for s in self.project.series.values() if s.selected]
@@ -350,7 +365,8 @@ class UI:
                         window = self.project.query_window
                     else:
                         window = spectrum.x.min(), spectrum.x.max()
-                    spectrum.find_peaks()
+
+                    spectrum.find_peaks(window)
                     assert isinstance(spectrum.peaks, np.ndarray)
                     peaks = spectrum.peaks
                     assert s.color

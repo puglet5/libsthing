@@ -160,6 +160,16 @@ def partition(alist, indices: list):
     return [alist[i:j] for i, j in zip([0] + indices, indices + [None])]
 
 
+def nearest_ciel(arr: np.ndarray, val: float):
+    i = np.searchsorted(arr, val)
+    return arr[i]
+
+
+def nearest_floor(arr: np.ndarray, val: float):
+    i = np.searchsorted(arr, val)
+    return arr[i - 1]
+
+
 def nearest(arr: np.ndarray, val: float):
     return arr.flat[np.abs(arr - val).argmin()]
 
@@ -229,6 +239,12 @@ class Peak:
                 ]
 
                 area = np.trapz(integration_y, integration_x)
+
+        if hwhm == 0:
+            self.fwhm = 0
+            self.sigma = 0.3
+            self.amplitude = self.y
+            return
 
         self.fwhm = hwhm * 2
         self.sigma = self.fwhm / 3.6
@@ -374,6 +390,7 @@ class Spectrum:
 
     def find_peaks(
         self,
+        region: tuple[float, float] | None = None,
         height=None,
         y: npt.NDArray | None = None,
     ):
@@ -381,7 +398,13 @@ class Spectrum:
             y = self.y
         assert y is not None
 
-        y_spl_der = -UnivariateSpline(self.x, y, s=0, k=3).derivative(2)(self.x)  # type: ignore
+        if region is None:
+            region = (self.x.min(), self.x.max())
+
+        x = self.x[np.logical_and(self.x >= region[0], self.x <= region[1])]
+        y = y[np.logical_and(self.x >= region[0], self.x <= region[1])]
+
+        y_spl_der = -UnivariateSpline(x, y, s=0, k=2).derivative(2)(x)  # type: ignore
         y_spl_der = np.clip(gaussian_filter1d(y_spl_der, 1), 0, None)
 
         if height is None:
@@ -395,7 +418,7 @@ class Spectrum:
             prominence=prominance,
         )[0]
 
-        self.peaks = np.array([self.x[peaks], y[peaks]]).T
+        self.peaks = np.array([x[peaks], y[peaks]]).T
 
     def _expand_windows(self, windows: np.ndarray, region: tuple[float, float]):
         if len(windows) == 1:
@@ -403,18 +426,58 @@ class Spectrum:
             windows[0][1] = region[1]
             return windows
 
+        assert isinstance(self.peaks, np.ndarray)
+
         for i, window in enumerate(windows):
             if i == 0:
                 window[0] = region[0]
                 mid_x = window[1] + (windows[i + 1][0] - window[1]) / 2
-                window[1] = nearest(self.x, mid_x)
+
+                nearest_peak_x_up = nearest_ciel(self.peaks[:, 0], mid_x)
+                nearest_peak_x_down = nearest_floor(self.peaks[:, 0], mid_x)
+
+                y_window = self.y[
+                    np.logical_and(
+                        self.x >= nearest_peak_x_down - 0.5 * self.step,
+                        self.x <= nearest_peak_x_up,
+                    )
+                ]
+                x_window = self.x[
+                    np.logical_and(
+                        self.x >= nearest_peak_x_down,
+                        self.x <= nearest_peak_x_up,
+                    )
+                ]
+
+                x_valley = x_window[y_window.argmin()]
+
+                window[1] = nearest_floor(self.x, x_valley)
             elif i == windows.shape[0] - 1:
                 window[0] = windows[i - 1][1] + self.step
                 window[1] = region[1]
             else:
                 window[0] = windows[i - 1][1] + self.step
                 mid_x = window[1] + (windows[i + 1][0] - window[1]) / 2
-                window[1] = nearest(self.x, mid_x)
+
+                nearest_peak_x_up = nearest_ciel(self.peaks[:, 0], mid_x)
+                nearest_peak_x_down = nearest_floor(self.peaks[:, 0], mid_x)
+
+                y_window = self.y[
+                    np.logical_and(
+                        self.x >= nearest_peak_x_down - 0.5 * self.step,
+                        self.x <= nearest_peak_x_up,
+                    )
+                ]
+                x_window = self.x[
+                    np.logical_and(
+                        self.x >= nearest_peak_x_down - 0.5 * self.step,
+                        self.x <= nearest_peak_x_up,
+                    )
+                ]
+
+                x_valley = x_window[y_window.argmin()]
+
+                window[1] = nearest_floor(self.x, x_valley)
 
         return windows
 
@@ -585,7 +648,6 @@ class Spectrum:
             )
         ]
         y = np.concatenate(fitted_y)
-        print(x.size, y.size)
         self.fitted = np.array([x, y]).T
 
 
