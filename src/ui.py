@@ -11,7 +11,7 @@ import numpy as np
 from attrs import define, field
 from natsort import natsorted
 
-from src.utils import Project, Window, loading_indicator, log_exec_time
+from src.utils import Project, Series, Window, loading_indicator, log_exec_time
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +157,13 @@ class UI:
         dpg.set_value("project_directory", data["file_path_name"])
         self.setup_project()
 
+    def set_series_color(self, sender: int | str, color: list[int]):
+        series_id = dpg.get_item_user_data(sender)
+        assert series_id
+        series = self.project.series[series_id]
+        series.color = (np.array(color) * [255, 255, 255, 200]).astype(int).tolist()
+        self.show_libs_plots()
+
     def show_libs_plots(self):
         range_from = dpg.get_value("normalize_from")
         range_to = dpg.get_value("normalize_to")
@@ -172,8 +179,8 @@ class UI:
         )
 
         with dpg.mutex():
-            for id, s in enumerate(self.project.selected_series):
-                spectrum = s.averaged
+            for id, series in enumerate(self.project.selected_series):
+                spectrum = series.averaged
                 assert spectrum.raw_spectral_data is not None
                 spectrum.process_spectral_data(
                     normalized,
@@ -187,50 +194,62 @@ class UI:
                 )
                 x, y = spectrum.xy.tolist()
 
-                if s.color is None:
-                    s.color = (
-                        np.array(
-                            dpg.sample_colormap(
-                                dpg.mvPlotColormap_Spectral,
-                                id / (len(self.project.series)),
+                if series.color is None:
+                    series.color = (
+                        (
+                            np.array(
+                                dpg.sample_colormap(
+                                    dpg.mvPlotColormap_Spectral,
+                                    id / (len(self.project.series)),
+                                )
                             )
+                            * [255, 255, 255, 255]
                         )
-                        * [255, 255, 255, 200]
-                    ).tolist()
+                        .astype(int)
+                        .tolist()
+                    )
 
                 with dpg.theme() as plot_theme:
                     with dpg.theme_component(dpg.mvLineSeries):
                         dpg.add_theme_color(
                             dpg.mvPlotCol_Line,
-                            s.color,
+                            series.color,
                             category=dpg.mvThemeCat_Plots,
                         )
 
-                if dpg.does_item_exist(f"series_plot_{s.id}"):
-                    dpg.configure_item(f"series_plot_{s.id}", x=x, y=y)
-                    dpg.bind_item_theme(f"series_plot_{s.id}", plot_theme)
+                if dpg.does_item_exist(f"series_plot_{series.id}"):
+                    dpg.configure_item(f"series_plot_{series.id}", x=x, y=y)
+                    dpg.bind_item_theme(f"series_plot_{series.id}", plot_theme)
                 else:
                     dpg.add_line_series(
                         x,
                         y,
                         parent="libs_y_axis",
-                        label=str(s.name),
-                        tag=f"series_plot_{s.id}",
+                        label=f"{series.name}",
+                        tag=f"series_plot_{series.id}",
                     )
-                    dpg.bind_item_theme(f"series_plot_{s.id}", plot_theme)
+                    dpg.bind_item_theme(f"series_plot_{series.id}", plot_theme)
+                    dpg.add_color_edit(
+                        default_value=series.color,
+                        parent=f"series_plot_{series.id}",
+                        user_data=series.id,
+                        callback=lambda sender, data: self.set_series_color(
+                            sender, data
+                        ),
+                    )
 
-                self.project.plotted_series_ids.add(s.id)
+                self.project.plotted_series_ids.add(series.id)
 
             if dpg.get_value("fit_to_axes"):
                 dpg.fit_axis_data("libs_x_axis")
                 dpg.fit_axis_data("libs_y_axis")
 
-            for s in self.project.series.values():
-                if s.id in self.project.plotted_series_ids and not s.id in [
+            for series in self.project.series.values():
+                if series.id in self.project.plotted_series_ids and not series.id in [
                     s.id for s in self.project.selected_series
                 ]:
-                    self.project.plotted_series_ids.discard(s.id)
-                    dpg.delete_item(f"series_plot_{s.id}")
+                    self.project.plotted_series_ids.discard(series.id)
+                    dpg.delete_item(f"series_plot_{series.id}")
 
         self.refresh_fitting_windows()
         self.refresh_peaks()
@@ -446,7 +465,6 @@ class UI:
         self.toggle_selection_guides(True, default_region)
 
     def handle_region_guide(self, guide, start_or_end: Literal[0, 1]):
-        print("test")
         start_value = dpg.get_value("region_guide_start")
         end_value = dpg.get_value("region_guide_end")
 
@@ -862,7 +880,7 @@ class UI:
                                     "X Window threshold".rjust(LABEL_PAD),
                                 )
                                 dpg.add_slider_float(
-                                    default_value=20,
+                                    default_value=8,
                                     min_value=0,
                                     max_value=40,
                                     format="%.2f",
