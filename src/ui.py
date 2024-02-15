@@ -69,7 +69,7 @@ class UI:
     def setup_dev(self):
         dpg.set_value(
             "project_directory",
-            "/home/puglet5/Documents/PROJ/libsthing/src/sandbox/libs/GR",
+            "/home/puglet5/Sync/ITMO/libs/GR",
         )
         self.setup_project()
         self.window_resize_callback()
@@ -237,7 +237,7 @@ class UI:
                     dpg.delete_item(f"series_plot_{s.id}")
 
         self.refresh_fitting_windows()
-        self.refresh_peaks()    
+        self.refresh_peaks()
 
     def toggle_series_list(self, state):
         dpg.delete_item("series_list_wrapper", children_only=True)

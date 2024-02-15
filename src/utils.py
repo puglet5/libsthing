@@ -69,6 +69,7 @@ P = ParamSpec("P")
 Window = tuple[float, float]
 Windows = list[Window]
 
+
 def log_exec_time(f: Callable[P, T]) -> Callable[P, T]:  # type:ignore
     @wraps(f)
     def _wrapper(*args, **kwargs):
@@ -176,6 +177,7 @@ def nearest_floor(arr: np.ndarray, val: float):
 
 def nearest(arr: np.ndarray, val: float):
     return arr.flat[np.abs(arr - val).argmin()]
+
 
 @define
 class Peak:
