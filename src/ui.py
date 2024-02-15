@@ -11,7 +11,7 @@ import numpy as np
 from attrs import define, field
 from natsort import natsorted
 
-from src.utils import Project, loading_indicator, log_exec_time
+from src.utils import Project, Window, loading_indicator, log_exec_time
 
 logger = logging.getLogger(__name__)
 
@@ -117,10 +117,6 @@ class UI:
 
     def on_key_ctrl_release(self):
         dpg.configure_item("libs_plots", pan_button=dpg.mvMouseButton_Left)
-        if not dpg.is_plot_queried("libs_plots"):
-            dpg.set_value("plot_selected_region_text", "None")
-            self.refresh_peaks()
-            self.refresh_fitting_windows()
 
     def on_key_ctrl_down(self):
         dpg.configure_item("libs_plots", pan_button=dpg.mvMouseButton_Middle)
@@ -298,8 +294,8 @@ class UI:
         y_threshold = dpg.get_value("fitting_windows_y_threshold")
         threshold_type = dpg.get_value("fitting_windows_y_threshold_type")
         subdivide = dpg.get_value("subdivide_selection_window_checkbox")
-        if dpg.is_plot_queried("libs_plots"):
-            region = self.project.query_window
+        if None not in self.project.selected_region:
+            region: Window = self.project.selected_region  # type: ignore
         else:
             region = spectrum.x_limits
 
@@ -326,17 +322,6 @@ class UI:
                 label=f"Fitted",
             )
 
-    def plot_query_callback(self, _sender, data):
-        if data == self.project.plot_query:
-            return
-
-        self.project.plot_query = data
-        region = f"{(data[0]):.2f}..{(data[1]):.2f} nm"
-        dpg.set_value("plot_selected_region_text", region)
-        with dpg.mutex():
-            self.refresh_fitting_windows()
-            self.refresh_peaks()
-
     def window_resize_callback(self, _sender=None, _data=None):
         w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
         if dpg.does_item_exist("loading_indicator"):
@@ -344,19 +329,23 @@ class UI:
 
     def toggle_fitting_windows(self, state: bool):
         if not state:
-            peaks = dpg.get_item_children("libs_plots", slot=0)
-            if peaks is None:
+            lines = dpg.get_item_children("libs_plots", slot=0)
+            if lines is None:
                 return
-            for peak in peaks:
+            for peak in lines:
                 if dpg.get_item_type(peak) == "mvAppItemType::mvDragLine":
-                    dpg.delete_item(peak)
+                    if dpg.get_item_alias(peak) not in (
+                        "region_guide_start",
+                        "region_guide_end",
+                    ):
+                        dpg.delete_item(peak)
 
         else:
             with dpg.mutex():
                 for series_id, series in enumerate(self.project.selected_series):
                     spectrum = series.averaged
-                    if dpg.is_plot_queried("libs_plots"):
-                        region = self.project.query_window
+                    if None not in self.project.selected_region:
+                        region: Window = self.project.selected_region  # type: ignore
                     else:
                         region = spectrum.x_limits
 
@@ -377,26 +366,16 @@ class UI:
 
                     if len(spectrum.fitting_windows) >= 1:
                         win_starts = [w[0] for w in spectrum.fitting_windows]
-                        reg_end = spectrum.fitting_windows[-1][1]
-
                         assert series.color
 
-                        for i, e in enumerate(win_starts):
+                        for i, e in enumerate(win_starts[1:]):
                             dpg.add_drag_line(
                                 color=series.color,
                                 default_value=e,
                                 parent="libs_plots",
-                                label=f"{series.name}_fitting_window_{i}",
-                                tag=f"{series.id}_fitting_window_{i}",
+                                label=f"{series.name}_fitting_window_{i+1}",
+                                tag=f"{series.id}_fitting_window_{i+1}",
                             )
-
-                        dpg.add_drag_line(
-                            color=series.color,
-                            default_value=reg_end,
-                            parent="libs_plots",
-                            label=f"{series.name}_fitting_window_end",
-                            tag=f"{series.id}_fitting_window_end",
-                        )
 
     def toggle_peaks(self, state: bool):
         if not state:
@@ -411,17 +390,17 @@ class UI:
             with dpg.mutex():
                 for id, s in enumerate(self.project.selected_series):
                     spectrum = s.averaged
-                    if dpg.is_plot_queried("libs_plots"):
-                        window = self.project.query_window
+                    if None not in self.project.selected_region:
+                        region: Window = self.project.selected_region  # type: ignore
                     else:
-                        window = spectrum.x_limits
+                        region = spectrum.x_limits
 
                     height = dpg.get_value("peak_height_threshold_slider")
                     prominance = dpg.get_value("peak_prominance_threshold_slider")
                     sigma = dpg.get_value("peak_smoothing_sigma_slider")
 
                     spectrum.find_peaks(
-                        window,
+                        region,
                         height=height,
                         prominance=prominance,
                         smoothing_sigma=sigma,
@@ -461,6 +440,99 @@ class UI:
     def refresh_all(self):
         self.refresh_fitting_windows()
         self.refresh_peaks()
+
+    def refresh_selection_guides(self, default_region: list[float] | None = None):
+        self.toggle_selection_guides(False)
+        self.toggle_selection_guides(True, default_region)
+
+    def handle_region_guide(self, guide, start_or_end: Literal[0, 1]):
+        print("test")
+        start_value = dpg.get_value("region_guide_start")
+        end_value = dpg.get_value("region_guide_end")
+
+        if start_value > end_value or end_value < start_value:
+            if start_or_end == 0:
+                dpg.set_value("region_guide_start", dpg.get_value("region_guide_end"))
+            else:
+                dpg.set_value("region_guide_end", dpg.get_value("region_guide_start"))
+
+        self.project.selected_region[start_or_end] = dpg.get_value(guide)
+
+        region = f"{(start_value):.2f}..{(end_value):.2f} nm"
+
+        dpg.set_value("plot_selected_region_text", region)
+
+        with dpg.mutex():
+            self.refresh_fitting_windows()
+            self.refresh_peaks()
+
+    def toggle_selection_guides(
+        self, state: bool, default_region: list[float] | None = None
+    ):
+        if not state:
+            if dpg.does_item_exist("region_guide_start"):
+                dpg.delete_item("region_guide_start")
+            if dpg.does_item_exist("region_guide_end"):
+                dpg.delete_item("region_guide_end")
+            self.project.selected_region = [None, None]
+            dpg.set_value("plot_selected_region_text", "None")
+            with dpg.mutex():
+                self.refresh_fitting_windows()
+                self.refresh_peaks()
+            return
+
+        if default_region is None:
+            region_start, region_end = self.project.selected_region
+            if len(self.project.selected_series) != 0:
+                limit_start, limit_end = self.project.selected_series[
+                    0
+                ].averaged.x_limits
+            else:
+                limit_start, limit_end = None, None
+
+            start, end = region_start or limit_start, region_end or limit_end
+
+            if start is None or end is None:
+                return
+        else:
+            start, end = default_region[0], default_region[1]
+
+        dpg.add_drag_line(
+            color=[0, 255, 0, 255],
+            thickness=2,
+            default_value=start,
+            parent="libs_plots",
+            tag="region_guide_start",
+            callback=lambda s: self.handle_region_guide(s, 0),
+            label="Selection start",
+        )
+
+        dpg.add_drag_line(
+            color=[0, 255, 0, 255],
+            thickness=2,
+            default_value=end,
+            parent="libs_plots",
+            callback=lambda s: self.handle_region_guide(s, 1),
+            tag="region_guide_end",
+            label="Selection end",
+        )
+
+        region = f"{(start):.2f}..{(end):.2f} nm"
+
+        self.project.selected_region = [start, end]
+
+        dpg.set_value("plot_selected_region_text", region)
+
+        with dpg.mutex():
+            self.refresh_fitting_windows()
+            self.refresh_peaks()
+
+    def plot_query_callback(self, sender, data):
+        region = list(data[0:2])
+        if not region == self.project.selected_region:
+            with dpg.mutex():
+                self.refresh_selection_guides(region)
+                dpg.set_value("selection_guides_checkbox", True)
 
     def setup_layout(self):
         with dpg.window(
@@ -536,307 +608,304 @@ class UI:
                     with dpg.tooltip("progress_bar", delay=TOOLTIP_DELAY_SEC):
                         dpg.add_text("Current operation progress")
 
-                    with dpg.child_window(
-                        label="Project",
-                        width=-1,
-                        height=200,
-                        menubar=True,
-                        no_scrollbar=True,
-                    ):
-                        with dpg.menu_bar():
-                            with dpg.menu(label="Project", enabled=False):
-                                pass
+                    with dpg.collapsing_header(label="Project", default_open=True):
 
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Project directory".rjust(LABEL_PAD))
-                            dpg.add_input_text(
-                                tag="project_directory",
-                                width=100,
-                                callback=lambda s, d: self.setup_project(),
-                                on_enter=True,
-                            )
-                            dpg.add_button(
-                                label="Browse",
-                                width=-1,
-                                callback=lambda: dpg.show_item(
-                                    "project_directory_picker"
-                                ),
-                            )
-                        with dpg.group(horizontal=True):
-                            dpg.add_text(
-                                default_value="Chosen directory is not valid!".rjust(
-                                    LABEL_PAD
-                                ),
-                                tag="project_directory_error_message",
-                                show=False,
-                                color=(200, 20, 20, 255),
-                            )
+                        with dpg.child_window(
+                            width=-1,
+                            height=200,
+                            no_scrollbar=True,
+                        ):
+                            with dpg.group(horizontal=True):
+                                dpg.add_text("Project directory".rjust(LABEL_PAD))
+                                dpg.add_input_text(
+                                    tag="project_directory",
+                                    width=100,
+                                    callback=lambda s, d: self.setup_project(),
+                                    on_enter=True,
+                                )
+                                dpg.add_button(
+                                    label="Browse",
+                                    width=-1,
+                                    callback=lambda: dpg.show_item(
+                                        "project_directory_picker"
+                                    ),
+                                )
+                            with dpg.group(horizontal=True):
+                                dpg.add_text(
+                                    default_value="Chosen directory is not valid!".rjust(
+                                        LABEL_PAD
+                                    ),
+                                    tag="project_directory_error_message",
+                                    show=False,
+                                    color=(200, 20, 20, 255),
+                                )
 
-                    with dpg.child_window(
-                        label="Plots",
-                        width=-1,
-                        height=400,
-                        menubar=True,
-                        no_scrollbar=True,
-                    ):
-                        with dpg.menu_bar():
-                            with dpg.menu(label="Plots", enabled=False):
-                                pass
-
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Normalize".rjust(LABEL_PAD))
-                            dpg.add_checkbox(
-                                tag="libs_normalized",
-                                default_value=False,
-                                callback=lambda _s, _d: self.show_libs_plots(),
-                            )
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Normalize in range:".rjust(LABEL_PAD))
-                            with dpg.group(horizontal=False):
-                                with dpg.group(horizontal=True):
-                                    dpg.add_text("from".rjust(4))
-                                    dpg.add_input_float(
-                                        tag="normalize_from",
-                                        width=-1,
-                                        max_value=10000,
-                                        min_value=0,
-                                        step_fast=20,
-                                        format="%.1f",
-                                        min_clamped=True,
-                                        max_clamped=True,
-                                        default_value=1,
-                                        callback=lambda _s, _d: self.show_libs_plots(),
-                                        on_enter=True,
-                                    )
-                                with dpg.group(horizontal=True):
-                                    dpg.add_text("to".rjust(4))
-                                    with dpg.tooltip(
-                                        dpg.last_item(), delay=TOOLTIP_DELAY_SEC
-                                    ):
-                                        dpg.add_text(
-                                            "Value of -1 indicates no upper limit (up to last row)",
-                                            wrap=400,
+                    with dpg.collapsing_header(label="Plots", default_open=True):
+                        with dpg.child_window(
+                            width=-1,
+                            height=400,
+                            no_scrollbar=True,
+                        ):
+                            with dpg.group(horizontal=True):
+                                dpg.add_text("Normalize".rjust(LABEL_PAD))
+                                dpg.add_checkbox(
+                                    tag="libs_normalized",
+                                    default_value=False,
+                                    callback=lambda _s, _d: self.show_libs_plots(),
+                                )
+                            with dpg.group(horizontal=True):
+                                dpg.add_text("Normalize in range:".rjust(LABEL_PAD))
+                                with dpg.group(horizontal=False):
+                                    with dpg.group(horizontal=True):
+                                        dpg.add_text("from".rjust(4))
+                                        dpg.add_input_float(
+                                            tag="normalize_from",
+                                            width=-1,
+                                            max_value=10000,
+                                            min_value=0,
+                                            step_fast=20,
+                                            format="%.1f",
+                                            min_clamped=True,
+                                            max_clamped=True,
+                                            default_value=1,
+                                            callback=lambda _s, _d: self.show_libs_plots(),
+                                            on_enter=True,
                                         )
-                                    dpg.add_input_float(
-                                        tag="normalize_to",
-                                        width=-1,
-                                        format="%.1f",
-                                        step_fast=20,
-                                        max_value=10000,
-                                        min_value=-1,
-                                        default_value=-1,
-                                        min_clamped=True,
-                                        max_clamped=True,
-                                        on_enter=True,
-                                        callback=lambda _s, _d: self.show_libs_plots(),
-                                    )
+                                    with dpg.group(horizontal=True):
+                                        dpg.add_text("to".rjust(4))
+                                        with dpg.tooltip(
+                                            dpg.last_item(), delay=TOOLTIP_DELAY_SEC
+                                        ):
+                                            dpg.add_text(
+                                                "Value of -1 indicates no upper limit (up to last row)",
+                                                wrap=400,
+                                            )
+                                        dpg.add_input_float(
+                                            tag="normalize_to",
+                                            width=-1,
+                                            format="%.1f",
+                                            step_fast=20,
+                                            max_value=10000,
+                                            min_value=-1,
+                                            default_value=-1,
+                                            min_clamped=True,
+                                            max_clamped=True,
+                                            on_enter=True,
+                                            callback=lambda _s, _d: self.show_libs_plots(),
+                                        )
 
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Always fit to axes".rjust(LABEL_PAD))
-                            dpg.add_checkbox(
-                                tag="fit_to_axes",
-                                default_value=False,
-                                callback=lambda _s, _d: self.show_libs_plots(),
-                            )
+                            with dpg.group(horizontal=True):
+                                dpg.add_text("Always fit to axes".rjust(LABEL_PAD))
+                                dpg.add_checkbox(
+                                    tag="fit_to_axes",
+                                    default_value=False,
+                                    callback=lambda _s, _d: self.show_libs_plots(),
+                                )
 
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Remove baseline".rjust(LABEL_PAD))
+                            with dpg.group(horizontal=True):
+                                dpg.add_text("Remove baseline".rjust(LABEL_PAD))
 
-                            dpg.add_combo(
-                                tag="libs_baseline_corrected",
-                                default_value="SNIP",
-                                items=["None", "SNIP", "Adaptive minmax", "Polynomial"],
-                                width=-1,
-                                callback=lambda _s, _d: self.show_libs_plots(),
-                            )
+                                dpg.add_combo(
+                                    tag="libs_baseline_corrected",
+                                    default_value="SNIP",
+                                    items=[
+                                        "None",
+                                        "SNIP",
+                                        "Adaptive minmax",
+                                        "Polynomial",
+                                    ],
+                                    width=-1,
+                                    callback=lambda _s, _d: self.show_libs_plots(),
+                                )
 
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Clip to zero".rjust(LABEL_PAD))
-                            dpg.add_checkbox(
-                                default_value=True,
-                                tag="clip_baseline",
-                                callback=lambda _s, _d: self.show_libs_plots(),
-                            )
+                            with dpg.group(horizontal=True):
+                                dpg.add_text("Clip to zero".rjust(LABEL_PAD))
+                                dpg.add_checkbox(
+                                    default_value=True,
+                                    tag="clip_baseline",
+                                    callback=lambda _s, _d: self.show_libs_plots(),
+                                )
 
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Max half window".rjust(LABEL_PAD))
-                            dpg.add_slider_int(
-                                default_value=40,
-                                width=-1,
-                                tag="max_half_window",
-                                min_value=2,
-                                max_value=80,
-                                clamped=True,
-                                callback=lambda _s, _d: self.show_libs_plots(),
-                            )
+                            with dpg.group(horizontal=True):
+                                dpg.add_text("Max half window".rjust(LABEL_PAD))
+                                dpg.add_slider_int(
+                                    default_value=40,
+                                    width=-1,
+                                    tag="max_half_window",
+                                    min_value=2,
+                                    max_value=80,
+                                    clamped=True,
+                                    callback=lambda _s, _d: self.show_libs_plots(),
+                                )
 
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Filter order".rjust(LABEL_PAD))
-                            dpg.add_combo(
-                                items=["2", "4", "6", "8"],
-                                default_value="2",
-                                width=-1,
-                                tag="filter_order",
-                                callback=lambda _s, _d: self.show_libs_plots(),
-                            )
+                            with dpg.group(horizontal=True):
+                                dpg.add_text("Filter order".rjust(LABEL_PAD))
+                                dpg.add_combo(
+                                    items=["2", "4", "6", "8"],
+                                    default_value="2",
+                                    width=-1,
+                                    tag="filter_order",
+                                    callback=lambda _s, _d: self.show_libs_plots(),
+                                )
 
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Min peak height".rjust(LABEL_PAD))
-                            dpg.add_slider_float(
-                                default_value=0.01,
-                                min_value=0,
-                                max_value=0.2,
-                                format="%.3f",
-                                clamped=True,
-                                tag="peak_height_threshold_slider",
-                                callback=lambda s, d: self.refresh_all(),
-                                width=-1,
-                            )
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Min peak prominance".rjust(LABEL_PAD))
-                            dpg.add_slider_float(
-                                default_value=0.01,
-                                min_value=0,
-                                max_value=0.2,
-                                format="%.3f",
-                                clamped=True,
-                                tag="peak_prominance_threshold_slider",
-                                callback=lambda s, d: self.refresh_all(),
-                                width=-1,
-                            )
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Peak smoothing sigma".rjust(LABEL_PAD))
-                            dpg.add_slider_float(
-                                default_value=1,
-                                min_value=0.0,
-                                max_value=2,
-                                format="%.3f",
-                                clamped=True,
-                                tag="peak_smoothing_sigma_slider",
-                                callback=lambda s, d: self.refresh_all(),
-                                width=-1,
-                            )
+                            with dpg.group(horizontal=True):
+                                dpg.add_text("Min peak height".rjust(LABEL_PAD))
+                                dpg.add_slider_float(
+                                    default_value=0.01,
+                                    min_value=0,
+                                    max_value=0.2,
+                                    format="%.3f",
+                                    clamped=True,
+                                    tag="peak_height_threshold_slider",
+                                    callback=lambda s, d: self.refresh_all(),
+                                    width=-1,
+                                )
+                            with dpg.group(horizontal=True):
+                                dpg.add_text("Min peak prominance".rjust(LABEL_PAD))
+                                dpg.add_slider_float(
+                                    default_value=0.01,
+                                    min_value=0,
+                                    max_value=0.2,
+                                    format="%.3f",
+                                    clamped=True,
+                                    tag="peak_prominance_threshold_slider",
+                                    callback=lambda s, d: self.refresh_all(),
+                                    width=-1,
+                                )
+                            with dpg.group(horizontal=True):
+                                dpg.add_text("Peak smoothing sigma".rjust(LABEL_PAD))
+                                dpg.add_slider_float(
+                                    default_value=1,
+                                    min_value=0.0,
+                                    max_value=2,
+                                    format="%.3f",
+                                    clamped=True,
+                                    tag="peak_smoothing_sigma_slider",
+                                    callback=lambda s, d: self.refresh_all(),
+                                    width=-1,
+                                )
 
-                    with dpg.child_window(
-                        label="Series",
-                        width=-1,
-                        height=300,
-                        menubar=True,
-                        no_scrollbar=True,
-                    ):
-                        with dpg.menu_bar():
-                            with dpg.menu(label="Series", enabled=False):
+                    with dpg.collapsing_header(label="Series", default_open=True):
+                        with dpg.child_window(
+                            width=-1,
+                            height=300,
+                            no_scrollbar=True,
+                        ):
+                            with dpg.group(horizontal=True):
+                                dpg.add_text("Mode".rjust(LABEL_PAD))
+                                dpg.add_combo(
+                                    items=["All", "Select", "Single"],
+                                    default_value="All",
+                                    width=-1,
+                                    tag="selection_mode_combo",
+                                    callback=lambda s, d: self.toggle_series_list(d),
+                                )
+
+                            with dpg.group(horizontal=False, tag="series_list_wrapper"):
                                 pass
 
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Mode".rjust(LABEL_PAD))
-                            dpg.add_combo(
-                                items=["All", "Select", "Single"],
-                                default_value="All",
-                                width=-1,
-                                tag="selection_mode_combo",
-                                callback=lambda s, d: self.toggle_series_list(d),
-                            )
+                    with dpg.collapsing_header(label="Fitting", default_open=True):
+                        with dpg.child_window(
+                            width=-1,
+                            height=-1,
+                            no_scrollbar=True,
+                        ):
 
-                        with dpg.group(horizontal=False, tag="series_list_wrapper"):
-                            pass
+                            with dpg.group(horizontal=True):
+                                dpg.add_text(
+                                    "Selected region:".rjust(LABEL_PAD),
+                                )
+                                dpg.add_checkbox(
+                                    tag="selection_guides_checkbox",
+                                    callback=lambda s, d: self.toggle_selection_guides(
+                                        d
+                                    ),
+                                )
+                                with dpg.tooltip(parent=dpg.last_item()):
+                                    dpg.add_text("Show region guides")
+                                dpg.add_text("None", tag="plot_selected_region_text")
 
-                    with dpg.child_window(
-                        label="Fitting",
-                        width=-1,
-                        height=-1,
-                        menubar=True,
-                        no_scrollbar=True,
-                    ):
-                        with dpg.menu_bar():
-                            with dpg.menu(label="Fitting", enabled=False):
-                                pass
+                            with dpg.group(horizontal=True):
+                                dpg.add_text("Subdivide region".rjust(LABEL_PAD))
+                                dpg.add_checkbox(
+                                    tag="subdivide_selection_window_checkbox",
+                                    default_value=True,
+                                    callback=lambda s, d: self.refresh_fitting_windows(),
+                                )
+                                dpg.add_button(
+                                    label="Fit",
+                                    width=-1,
+                                    callback=lambda s, d: self.perform_fit(),
+                                )
+                            with dpg.group(horizontal=True):
+                                dpg.add_text(
+                                    "Show fitting windows".rjust(LABEL_PAD),
+                                )
+                                dpg.add_checkbox(
+                                    default_value=False,
+                                    tag="toggle_fitting_windows_checkbox",
+                                    callback=lambda s, d: self.toggle_fitting_windows(
+                                        d
+                                    ),
+                                )
+                            with dpg.group(horizontal=True):
+                                dpg.add_text(
+                                    "Show peaks".rjust(LABEL_PAD),
+                                )
+                                dpg.add_checkbox(
+                                    default_value=False,
+                                    tag="toggle_peaks_checkbox",
+                                    callback=lambda s, d: self.toggle_peaks(d),
+                                )
+                            with dpg.group(horizontal=True):
+                                dpg.add_text(
+                                    "X Window threshold".rjust(LABEL_PAD),
+                                )
+                                dpg.add_slider_float(
+                                    default_value=20,
+                                    min_value=0,
+                                    max_value=40,
+                                    format="%.2f",
+                                    clamped=True,
+                                    tag="fitting_windows_x_threshold",
+                                    callback=lambda s, d: self.refresh_fitting_windows(),
+                                    width=-1,
+                                )
+                            with dpg.group(horizontal=True):
+                                dpg.add_text(
+                                    "Y Window threshold".rjust(LABEL_PAD),
+                                )
+                                dpg.add_slider_float(
+                                    default_value=0.001,
+                                    min_value=0,
+                                    max_value=0.2,
+                                    format="%.3f",
+                                    clamped=True,
+                                    tag="fitting_windows_y_threshold",
+                                    callback=lambda s, d: self.refresh_fitting_windows(),
+                                    width=-1,
+                                )
+                            with dpg.group(horizontal=True):
+                                dpg.add_text("".rjust(LABEL_PAD))
+                                dpg.add_combo(
+                                    tag="fitting_windows_y_threshold_type",
+                                    items=["Absolute", "Relative"],
+                                    default_value="Relative",
+                                    width=-1,
+                                    callback=lambda s, d: self.change_fitting_windows_threshold_type(
+                                        d
+                                    ),
+                                )
 
-                        with dpg.group(horizontal=True):
-                            dpg.add_text(
-                                "Selected region:".rjust(LABEL_PAD),
-                            )
-                            dpg.add_text("None", tag="plot_selected_region_text")
-
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Subdivide region".rjust(LABEL_PAD))
-                            dpg.add_checkbox(
-                                tag="subdivide_selection_window_checkbox",
-                                default_value=True,
-                                callback=lambda s, d: self.refresh_fitting_windows(),
-                            )
-                            dpg.add_button(
-                                label="Fit",
-                                width=-1,
-                                callback=lambda s, d: self.perform_fit(),
-                            )
-                        with dpg.group(horizontal=True):
-                            dpg.add_text(
-                                "Show fitting windows".rjust(LABEL_PAD),
-                            )
-                            dpg.add_checkbox(
-                                default_value=False,
-                                tag="toggle_fitting_windows_checkbox",
-                                callback=lambda s, d: self.toggle_fitting_windows(d),
-                            )
-                        with dpg.group(horizontal=True):
-                            dpg.add_text(
-                                "Show peaks".rjust(LABEL_PAD),
-                            )
-                            dpg.add_checkbox(
-                                default_value=False,
-                                tag="toggle_peaks_checkbox",
-                                callback=lambda s, d: self.toggle_peaks(d),
-                            )
-                        with dpg.group(horizontal=True):
-                            dpg.add_text(
-                                "X Window threshold".rjust(LABEL_PAD),
-                            )
-                            dpg.add_slider_float(
-                                default_value=20,
-                                min_value=0,
-                                max_value=40,
-                                format="%.2f",
-                                clamped=True,
-                                tag="fitting_windows_x_threshold",
-                                callback=lambda s, d: self.refresh_fitting_windows(),
-                                width=-1,
-                            )
-                        with dpg.group(horizontal=True):
-                            dpg.add_text(
-                                "Y Window threshold".rjust(LABEL_PAD),
-                            )
-                            dpg.add_slider_float(
-                                default_value=0.001,
-                                min_value=0,
-                                max_value=0.2,
-                                format="%.3f",
-                                clamped=True,
-                                tag="fitting_windows_y_threshold",
-                                callback=lambda s, d: self.refresh_fitting_windows(),
-                                width=-1,
-                            )
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("".rjust(LABEL_PAD))
-                            dpg.add_combo(
-                                tag="fitting_windows_y_threshold_type",
-                                items=["Absolute", "Relative"],
-                                default_value="Relative",
-                                width=-1,
-                                callback=lambda s, d: self.change_fitting_windows_threshold_type(
-                                    d
-                                ),
-                            )
-
-                        with dpg.group(horizontal=True):
-                            dpg.add_text("Max fit iterations".rjust(LABEL_PAD))
-                            dpg.add_input_int(
-                                tag="max_fit_iterations",
-                                default_value=-1,
-                                min_value=-1,
-                                width=-1,
-                                min_clamped=True,
-                            )
+                            with dpg.group(horizontal=True):
+                                dpg.add_text("Max fit iterations".rjust(LABEL_PAD))
+                                dpg.add_input_int(
+                                    tag="max_fit_iterations",
+                                    default_value=-1,
+                                    min_value=-1,
+                                    width=-1,
+                                    min_clamped=True,
+                                )
 
                 with dpg.child_window(border=False, width=-1, tag="data"):
                     with dpg.group(horizontal=True):

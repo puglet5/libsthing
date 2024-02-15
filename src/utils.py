@@ -772,7 +772,7 @@ class Project:
     series_dirs: list[Path] = field(init=False, factory=list)
     series: Mapping[str, Series] = field(init=False, factory=list)
     plotted_series_ids: set[str] = field(init=False, default=set())
-    plot_query: list[float] | None = field(init=False, default=None)
+    selected_region: list[float] | list[None] = field(init=False, default=[None, None])
 
     def __attrs_post_init__(self):
         self.validate_directory()
@@ -796,13 +796,6 @@ class Project:
         selected_series = [s for s in self.series.values() if s.selected]
         selected_series = natsorted(selected_series, key=lambda s: s.name)
         return selected_series
-
-    @property
-    def query_window(self):
-        if self.plot_query is None:
-            return (0.0, 0.0)
-        else:
-            return (self.plot_query[0], self.plot_query[1])
 
     @log_exec_time
     @partial(loading_indicator, message="Loading series")
