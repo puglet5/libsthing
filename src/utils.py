@@ -1,3 +1,4 @@
+import gc
 import logging
 import os
 import re
@@ -54,6 +55,7 @@ PA_CONVERT_OPTIONS_SKIP_X = csv.ConvertOptions(
     include_columns=["f1"],
 )
 
+LOADING_INDICATOR_FETCH_DELAY_S = 0.01
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 logging.basicConfig(filename=Path(ROOT_DIR, "log/main.log"), filemode="a")
 coloredlogs.install(level="DEBUG")
@@ -64,6 +66,8 @@ CPU_COUNT = cpu_count()
 T = TypeVar("T")
 P = ParamSpec("P")
 
+Window = tuple[float, float]
+Windows = list[Window]
 
 def log_exec_time(f: Callable[P, T]) -> Callable[P, T]:  # type:ignore
     @wraps(f)
@@ -86,8 +90,8 @@ def hide_loading_indicator():
 
 
 def loading_indicator(
-    f: Callable[P, Generator[float | int, Any | None, None]], message: str
-) -> Callable[P, Generator[float | int, Any | None, None]]:  # type:ignore
+    f: Callable[P, Generator[float | int, Any, Any]], message: str
+) -> Callable[P, Generator[float | int, Any, Any]]:  # type:ignore
     @wraps(f)
     def _wrapper(*args, **kwargs):
         dpg.configure_item("loading_indicator_message", label=message.center(30))
@@ -172,9 +176,6 @@ def nearest_floor(arr: np.ndarray, val: float):
 
 def nearest(arr: np.ndarray, val: float):
     return arr.flat[np.abs(arr - val).argmin()]
-
-Window = tuple[float, float]
-Windows = list[Window]
 
 @define
 class Peak:
@@ -309,7 +310,7 @@ class Spectrum:
 
             return np.c_[x, y]
 
-    @cached_property
+    @property
     def x(self):
         if self.raw_spectral_data is None:
             raise ValueError
@@ -330,6 +331,10 @@ class Spectrum:
         if self.processed_spectral_data is None:
             raise ValueError
         return self.processed_spectral_data.T
+
+    @property
+    def x_limits(self) -> Window:
+        return (self.x.min(), self.x.max())
 
     def baseline(
         self,
@@ -403,7 +408,7 @@ class Spectrum:
         assert y is not None
 
         if region is None:
-            region = (self.x.min(), self.x.max())
+            region = self.x_limits
 
         x = self.x[np.logical_and(self.x >= region[0], self.x <= region[1])]
         y = y[np.logical_and(self.x >= region[0], self.x <= region[1])]
@@ -530,11 +535,16 @@ class Spectrum:
 
         model: Model = np.sum([peak.model for peak in selected_peaks])
 
-        result = model.fit(win_y, params=params, x=win_x, max_nfev=max_iterations)
+        try:
+            result = model.fit(win_y, params=params, x=win_x, max_nfev=max_iterations)
+        except TypeError as e:
+            logger.error(f"Wrong fit parameters: {e}")
+            self.fit_result = None
+            return self.fit_result
 
         self.fit_result = result
 
-        return result.best_fit
+        return self.fit_result
 
     def generate_fitting_windows(
         self,
@@ -553,42 +563,39 @@ class Spectrum:
 
         region_min, region_max = region
 
+        peak_xs = self.peaks[:, 0]
         selected_peaks = self.peaks[
-            np.logical_and(
-                self.peaks[:, 0] >= region_min, self.peaks[:, 0] <= region_max
-            )
+            np.logical_and(peak_xs >= region_min, peak_xs <= region_max)
         ]
 
-        peak_x_diffs = np.diff(selected_peaks[:, 0])
+        selected_peak_xs = selected_peaks[:, 0]
+        peak_x_diffs = np.diff(selected_peak_xs)
         x_split_ids = [
             np.where(np.isclose(peak_x_diffs, v))[0][0] + 1
-            for v in peak_x_diffs[peak_x_diffs > x_threshold]
+            for v in peak_x_diffs[peak_x_diffs >= x_threshold]
         ]
 
         peak_ids = {0, *x_split_ids, len(selected_peaks)}
 
+        # subdivide peaks into windows where win_y / win_y.max() <= y_threshold
         while True:
             peak_ids_init = peak_ids.copy()
-            peak_split_ids = sorted(list(peak_ids))
+            peak_split_ids = sorted(peak_ids)
             for i, j in zip(peak_split_ids, peak_split_ids[1:]):
-                if selected_peaks[i:j][:, 0].size > 1:
-                    peak_win_x = selected_peaks[i:j][:, 0]
+                peak_win_x = selected_peaks[i:j][:, 0]
+                if peak_win_x.size > 1:
                     x_min, x_max = peak_win_x.min(), peak_win_x.max()
-                    win_x = self.x[np.logical_and(self.x >= x_min, self.x <= x_max)]
-                    win_y = self.y[np.logical_and(self.x >= x_min, self.x <= x_max)]
-                    y_min, y_max = win_y.min(), win_y.max()
+                    peak_mask = np.logical_and(self.x >= x_min, self.x <= x_max)
+                    win_x, win_y = self.x[peak_mask], self.y[peak_mask]
 
                     if threshold_type == "Absolute":
                         mask = win_y <= y_threshold
                     else:
-                        mask = win_y / y_max <= y_threshold
+                        mask = win_y / win_y.max() <= y_threshold
+
                     for x in win_x[mask]:
                         split_peak_i = np.searchsorted(
-                            selected_peaks[:, 0],
-                            [
-                                x,
-                            ],
-                            side="left",
+                            selected_peak_xs, [x], side="left"
                         )[0]
                         if selected_peaks[split_peak_i][0] >= x_min:
                             peak_ids.add(split_peak_i)
@@ -596,7 +603,7 @@ class Spectrum:
             if len(peak_ids) == len(peak_ids_init):
                 break
 
-        final_split_ids = sorted(list(peak_ids))[1:-1]
+        final_split_ids = sorted(peak_ids)[1:-1]
 
         partitioned_peaks = partition(selected_peaks, final_split_ids)
 
@@ -614,21 +621,40 @@ class Spectrum:
 
         windows = self._expand_windows(partitioned_ranges, region)
 
-        # ensure window size >= 4 x steps
-        small_ids = {
-            i
-            for i, w in enumerate(windows)
-            if self.x[np.logical_and(self.x >= w[0], self.x <= w[1])].size < 4
-        }
+        if len(windows) == 1:
+            self.fitting_windows = windows.tolist()
+            return
 
-        for i in small_ids.copy():
-            if i in small_ids:
-                try:
-                    windows[i, 1] = windows[i + 1, 1]
-                    windows = np.delete(windows, i + 1, axis=0)
-                    small_ids.discard(i)
-                except IndexError:
-                    pass
+        # ensure window size >= 8
+        n = 0
+        while n < 100:
+            small_ids = {
+                i
+                for i, w in enumerate(windows)
+                if self.x[np.logical_and(self.x >= w[0], self.x <= w[1])].size
+                <= max(x_threshold, 8)
+            }
+            small_ids_init = small_ids.copy()
+
+            for i in small_ids_init:
+                if i in small_ids:
+                    try:
+                        windows[i, 1] = windows[i + 1, 1]
+                        windows = np.delete(windows, i + 1, axis=0)
+                        small_ids.discard(i)
+                    except IndexError:
+                        try:
+                            if i < len(windows):
+                                windows[i - 1, 1] = windows[i, 1]
+                                windows = np.delete(windows, i, axis=0)
+                                small_ids.discard(i)
+                        except IndexError:
+                            pass
+
+            if len(small_ids_init) == len(small_ids):
+                break
+
+            n += 1
 
         self.fitting_windows = windows.tolist()
 
@@ -645,14 +671,19 @@ class Spectrum:
                 result = pool.amap(fitting_func, windows)
                 while not result.ready():
                     yield (1 - result._number_left / len(windows)) * 100
-                    time.sleep(0.01)
+                    time.sleep(LOADING_INDICATOR_FETCH_DELAY_S)
 
                     if dpg.is_key_down(dpg.mvKey_Escape):
                         return
 
-                fitted_y = result.get()
+                fitted_results = result.get()
             except Exception as e:
-                logger.exception(f"Error while fitting: {e}")
+                logger.error(f"Error while fitting: {e}")
+                pool.terminate()
+                pool.join()
+
+                return
+
             finally:
                 pool.close()
                 pool.join()
@@ -664,6 +695,13 @@ class Spectrum:
         ]
 
         try:
+            for r in fitted_results:
+                if r is None:
+                    raise ValueError(
+                        "Fitting failed in some windows. Possibly too many fit parameters for a given window size"
+                    )
+
+            fitted_y = [r.best_fit for r in fitted_results]
             y = np.concatenate(fitted_y)
         except ValueError as e:
             logger.error(f"Fitting result error: {e}")
@@ -773,7 +811,7 @@ class Project:
                 result = pool.amap(Series, self.series_dirs, chunksize=1)
                 while not result.ready():
                     yield (1 - result._number_left / len(self.series_dirs)) * 100
-                    time.sleep(0.01)
+                    time.sleep(LOADING_INDICATOR_FETCH_DELAY_S)
                 self.series = {s.id: s for s in result.get()}
             except IndexError as e:
                 raise ValueError from e

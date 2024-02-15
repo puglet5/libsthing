@@ -31,14 +31,15 @@ class UI:
     def __attrs_post_init__(self):
         dpg.create_context()
         dpg.create_viewport(title="hsistat", width=1920, height=1080, vsync=True)
-        dpg.configure_app(wait_for_input=False, manual_callback_management=True)
+        dpg.configure_app(wait_for_input=False)
+
         self.setup_themes()
         self.bind_themes()
         self.setup_handler_registries()
         self.setup_layout()
         self.bind_item_handlers()
 
-    def start(self, dev=False):
+    def start(self, dev=False, debug=False):
         dpg.setup_dearpygui()
         dpg.show_viewport()
         dpg.set_viewport_vsync(True)
@@ -46,10 +47,16 @@ class UI:
         try:
             if dev:
                 dpg.set_frame_callback(1, self.setup_dev)
-            while dpg.is_dearpygui_running():
-                jobs = dpg.get_callback_queue()  # retrieves and clears queue
-                dpg.run_callbacks(jobs)
-                dpg.render_dearpygui_frame()
+                if debug:
+                    dpg.configure_app(manual_callback_management=True)
+                    while dpg.is_dearpygui_running():
+                        jobs = dpg.get_callback_queue()  # retrieves and clears queue
+                        dpg.run_callbacks(jobs)
+                        dpg.render_dearpygui_frame()
+                else:
+                    dpg.start_dearpygui()
+            else:
+                dpg.start_dearpygui()
         except Exception as e:
             logger.fatal(e)
         finally:
@@ -294,7 +301,7 @@ class UI:
         if dpg.is_plot_queried("libs_plots"):
             region = self.project.query_window
         else:
-            region = spectrum.x.min(), spectrum.x.max()
+            region = spectrum.x_limits
 
         if subdivide:
             spectrum.generate_fitting_windows(
@@ -319,7 +326,7 @@ class UI:
                 label=f"Fitted",
             )
 
-    def plot_query_callback(self, sender, data):
+    def plot_query_callback(self, _sender, data):
         if data == self.project.plot_query:
             return
 
@@ -351,7 +358,7 @@ class UI:
                     if dpg.is_plot_queried("libs_plots"):
                         region = self.project.query_window
                     else:
-                        region = spectrum.x.min(), spectrum.x.max()
+                        region = spectrum.x_limits
 
                     x_threshold = dpg.get_value("fitting_windows_x_threshold")
                     y_threshold = dpg.get_value("fitting_windows_y_threshold")
@@ -407,7 +414,7 @@ class UI:
                     if dpg.is_plot_queried("libs_plots"):
                         window = self.project.query_window
                     else:
-                        window = spectrum.x.min(), spectrum.x.max()
+                        window = spectrum.x_limits
 
                     height = dpg.get_value("peak_height_threshold_slider")
                     prominance = dpg.get_value("peak_prominance_threshold_slider")
