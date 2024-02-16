@@ -334,6 +334,9 @@ class UI:
                         callback=lambda sender, data: self.set_series_color(
                             sender, data
                         ),
+                        alpha_preview=dpg.mvColorEdit_AlphaPreviewHalf,
+                        display_mode=dpg.mvColorEdit_rgb,
+                        input_mode=dpg.mvColorEdit_input_rgb,
                     )
 
                 self.project.plotted_series_ids.add(series.id)

@@ -296,7 +296,6 @@ class Spectrum:
                     parse_options=PA_PARSE_OPTIONS,
                     convert_options=PA_CONVERT_OPTIONS,
                 ),
-                dtype=np.float32,
             )
         else:
             x = self.common_x
@@ -307,7 +306,6 @@ class Spectrum:
                     parse_options=PA_PARSE_OPTIONS,
                     convert_options=PA_CONVERT_OPTIONS_SKIP_X,
                 ),
-                dtype=np.float32,
             )
 
             return np.c_[x, y]
