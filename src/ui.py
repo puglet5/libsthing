@@ -9,7 +9,7 @@ from typing import Literal
 import dearpygui.dearpygui as dpg
 import numpy as np
 from attrs import define, field
-from natsort import natsorted
+from natsort import index_natsorted, natsorted, order_by_index
 
 from src.utils import Project, Series, Window, loading_indicator, log_exec_time
 
@@ -27,6 +27,9 @@ class UI:
     sidebar_width: Literal[350] = 350
     global_theme: int = field(init=False, default=0)
     button_theme: int = field(init=False, default=0)
+    thumbnail_plot_theme: int = field(init=False, default=0)
+    active_thumbnail_plot_theme: int = field(init=False, default=0)
+    series_list_n_columns: int = field(init=False, default=5)
 
     def __attrs_post_init__(self):
         dpg.create_context()
@@ -102,6 +105,21 @@ class UI:
                     category=dpg.mvThemeCat_Core,
                 )
 
+        with dpg.theme() as self.thumbnail_plot_theme:
+            with dpg.theme_component(dpg.mvPlot):
+                dpg.add_theme_style(
+                    dpg.mvPlotStyleVar_PlotPadding, 0, 0, category=dpg.mvThemeCat_Plots
+                )
+
+        with dpg.theme() as self.active_thumbnail_plot_theme:
+            with dpg.theme_component(dpg.mvPlot):
+                dpg.add_theme_style(
+                    dpg.mvPlotStyleVar_PlotPadding, 0, 0, category=dpg.mvThemeCat_Plots
+                )
+                dpg.add_theme_color(
+                    dpg.mvThemeCol_Border, [0, 255, 0, 200], category=dpg.mvAll
+                )
+
     def bind_themes(self):
         dpg.bind_theme(self.global_theme)
 
@@ -110,6 +128,14 @@ class UI:
             dpg.add_key_down_handler(dpg.mvKey_Control, callback=self.on_key_ctrl_down)
             dpg.add_key_release_handler(
                 dpg.mvKey_Control, callback=self.on_key_ctrl_release
+            )
+            dpg.add_mouse_click_handler(
+                dpg.mvMouseButton_Left,
+                callback=lambda s, d: self.series_left_click(),
+            )
+            dpg.add_mouse_click_handler(
+                dpg.mvMouseButton_Right,
+                callback=lambda s, d: self.series_right_click(),
             )
 
         with dpg.item_handler_registry(tag="window_resize_handler"):
@@ -122,6 +148,76 @@ class UI:
         dpg.configure_item("libs_plots", pan_button=dpg.mvMouseButton_Middle)
         if dpg.is_key_pressed(dpg.mvKey_Q):
             self.stop()
+
+    def series_left_click(self):
+        series_rows = dpg.get_item_children("series_list_wrapper", slot=1)
+        if series_rows is None:
+            return
+
+        for row in series_rows:
+            series_groups = dpg.get_item_children(row, slot=1)
+            if series_groups is None:
+                return
+
+            for group in series_groups:
+                sid = dpg.get_item_user_data(group)
+                if sid is None:
+                    return
+
+                if dpg.is_item_active(group):
+                    series = self.project.series[sid]
+                    group_children = dpg.get_item_children(group, slot=1)
+                    if group_children is None:
+                        return
+
+                    thumbnail = group_children[0]
+                    if not series.selected:
+                        dpg.bind_item_theme(thumbnail, self.active_thumbnail_plot_theme)
+                        series.selected = True
+                    else:
+                        dpg.bind_item_theme(thumbnail, self.thumbnail_plot_theme)
+                        series.selected = False
+
+                    self.show_libs_plots()
+                    self.refresh_fitting_windows()
+                    self.refresh_peaks()
+
+    def series_right_click(self):
+        series_rows = dpg.get_item_children("series_list_wrapper", slot=1)
+        if series_rows is None:
+            return
+
+        for row in series_rows:
+            series_groups = dpg.get_item_children(row, slot=1)
+            if series_groups is None:
+                return
+
+            for group in series_groups:
+                sid = dpg.get_item_user_data(group)
+                if sid is None:
+                    return
+
+                if dpg.is_item_hovered(group):
+                    series = self.project.series[sid]
+                    group_children = dpg.get_item_children(group, slot=1)
+                    if group_children is None:
+                        return
+
+                    with dpg.window(
+                        pos=dpg.get_mouse_pos(),
+                        no_title_bar=True,
+                        no_move=True,
+                        no_open_over_existing_popup=True,
+                        popup=True,
+                        menubar=True,
+                    ):
+                        with dpg.menu_bar():
+                            dpg.add_menu(label=f"{series.name} info", enabled=False)
+
+                        dpg.add_text(f"Directory: {series.directory}")
+                        dpg.add_text(
+                            f"{len(series.samples)} samples with {np.sum([len(s.spectra) for s in series.samples])} spectra total"
+                        )
 
     def bind_item_handlers(self):
         dpg.bind_item_handler_registry(self.window, "window_resize_handler")
@@ -149,7 +245,7 @@ class UI:
             return
 
         self.show_libs_plots()
-        self.toggle_series_list(dpg.get_value("selection_mode_combo"))
+        self.populate_series_list()
         dpg.fit_axis_data("libs_x_axis")
         dpg.fit_axis_data("libs_y_axis")
 
@@ -162,7 +258,9 @@ class UI:
         assert series_id
         series = self.project.series[series_id]
         series.color = (np.array(color) * [255, 255, 255, 200]).astype(int).tolist()
-        self.show_libs_plots()
+        with dpg.mutex():
+            self.populate_series_list(skip_plot_update=True)
+            self.show_libs_plots()
 
     def show_libs_plots(self):
         range_from = dpg.get_value("normalize_from")
@@ -254,58 +352,95 @@ class UI:
         self.refresh_fitting_windows()
         self.refresh_peaks()
 
-    def toggle_series_list(self, state):
+        line_series = dpg.get_item_children("libs_y_axis", slot=1)
+        assert isinstance(line_series, list)
+        line_series_labels = [dpg.get_item_label(s) for s in line_series]
+        index = index_natsorted(line_series_labels)
+        sorted_line_series: list[int] = order_by_index(line_series, index)  # type: ignore
+        dpg.reorder_items("libs_y_axis", slot=1, new_order=sorted_line_series)
+
+    def populate_series_list(self, skip_plot_update=False):
         dpg.delete_item("series_list_wrapper", children_only=True)
-        if state == "Select":
-            for s in self.project.series.values():
-                with dpg.group(horizontal=True, parent="series_list_wrapper"):
-                    dpg.add_text("".ljust(LABEL_PAD))
-                    dpg.add_selectable(
-                        label=f"{s.name}",
-                        tag=f"{s.id}_selectable",
-                        default_value=s.selected,
-                        user_data=s.id,
-                        callback=lambda s, d: self.toggle_series_selection(s, d),
+
+        for i in range(len(self.project.series) // self.series_list_n_columns + 1):
+            dpg.add_group(
+                tag=f"series_row_{i}", horizontal=True, parent="series_list_wrapper"
+            )
+
+        for i, (s_id, series) in enumerate(self.project.series.items()):
+            series.selected = True
+            with dpg.group(
+                horizontal=False,
+                parent=f"series_row_{i//self.series_list_n_columns}",
+                user_data=s_id,
+            ):
+                assert series.color
+                with dpg.theme() as plot_theme:
+                    with dpg.theme_component(dpg.mvLineSeries):
+                        dpg.add_theme_color(
+                            dpg.mvPlotCol_Line,
+                            series.color,
+                            category=dpg.mvThemeCat_Plots,
+                        )
+
+                with dpg.plot(
+                    width=60,
+                    height=60,
+                    no_box_select=True,
+                    no_mouse_pos=True,
+                    no_menus=True,
+                    pan_button=-1,
+                    no_title=True,
+                    tag=f"{s_id}_thumbnail_plot",
+                ):
+                    dpg.add_plot_axis(
+                        dpg.mvXAxis,
+                        no_gridlines=True,
+                        no_tick_labels=True,
+                        no_tick_marks=True,
+                        tag=f"{s_id}_thumbnail_plot_x_axis",
+                    )
+                    dpg.add_plot_axis(
+                        dpg.mvYAxis,
+                        no_gridlines=True,
+                        no_tick_labels=True,
+                        no_tick_marks=True,
+                        tag=f"{s_id}_thumbnail_plot_y_axis",
+                    )
+                    dpg.add_line_series(
+                        *series.averaged.xy.tolist(),
+                        parent=dpg.last_item(),
+                        tag=f"{s_id}_thumbnail_plot_series",
+                    )
+                    dpg.bind_item_theme(dpg.last_item(), plot_theme)
+
+                    dpg.set_axis_limits(
+                        f"{s_id}_thumbnail_plot_y_axis",
+                        series.averaged.y.min(),
+                        series.averaged.y.max(),
+                    )
+                    dpg.set_axis_limits(
+                        f"{s_id}_thumbnail_plot_x_axis",
+                        series.averaged.x.min(),
+                        series.averaged.x.max(),
                     )
 
-        if state == "Single":
-            for s in self.project.series.values():
-                s.selected = False
-                with dpg.group(horizontal=True, parent="series_list_wrapper"):
-                    dpg.add_text("".ljust(LABEL_PAD))
-                    dpg.add_selectable(
-                        label=f"{s.name}",
-                        default_value=s.selected,
-                        tag=f"{s.id}_selectable",
-                        user_data=s.id,
-                        callback=lambda s, d: self.toggle_series_selection(s, d),
+                dpg.add_text(f"{series.name}"[:8].center(8))
+                with dpg.tooltip(delay=TOOLTIP_DELAY_SEC, parent=dpg.last_item()):
+                    dpg.add_text(f"{series.name}")
+
+                if series.selected:
+                    dpg.bind_item_theme(
+                        f"{s_id}_thumbnail_plot",
+                        self.active_thumbnail_plot_theme,
+                    )
+                else:
+                    dpg.bind_item_theme(
+                        f"{s_id}_thumbnail_plot", self.thumbnail_plot_theme
                     )
 
-        if state == "All":
-            for s in self.project.series.values():
-                s.selected = True
-        self.show_libs_plots()
-
-    def toggle_series_selection(self, sender, state: bool):
-        clicked_series_id = dpg.get_item_user_data(sender)
-        assert isinstance(clicked_series_id, str)
-
-        if dpg.get_value("selection_mode_combo") == "Select":
-            self.project.series[clicked_series_id].selected = state
-
-        if dpg.get_value("selection_mode_combo") == "Single":
-            for series_id in self.project.series:
-                dpg.set_value(f"{series_id}_selectable", False)
-
-            for s in self.project.series.values():
-                s.selected = False
-
-            self.project.series[clicked_series_id].selected = True
-            dpg.set_value(sender, True)
-
-        self.show_libs_plots()
-        self.refresh_fitting_windows()
-        self.refresh_peaks()
+        if not skip_plot_update:
+            self.show_libs_plots()
 
     def perform_fit(self):
         spectrum = self.project.selected_series[0].averaged
@@ -809,16 +944,6 @@ class UI:
                             height=300,
                             no_scrollbar=True,
                         ):
-                            with dpg.group(horizontal=True):
-                                dpg.add_text("Mode".rjust(LABEL_PAD))
-                                dpg.add_combo(
-                                    items=["All", "Select", "Single"],
-                                    default_value="All",
-                                    width=-1,
-                                    tag="selection_mode_combo",
-                                    callback=lambda s, d: self.toggle_series_list(d),
-                                )
-
                             with dpg.group(horizontal=False, tag="series_list_wrapper"):
                                 pass
 
