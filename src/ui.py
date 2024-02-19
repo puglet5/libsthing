@@ -11,6 +11,7 @@ import numpy as np
 from attrs import define, field
 from natsort import index_natsorted, natsorted, order_by_index
 
+from settings import Setting, Settings
 from src.utils import Project, Series, Window, loading_indicator, log_exec_time
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ LABEL_PAD = 23
 @define(repr=False, eq=False)
 class UI:
     project: Project = field(init=False)
+    settings: Settings = field(init=False)
     window: Literal["primary"] = field(init=False, default="primary")
     sidebar_width: Literal[350] = 350
     global_theme: int = field(init=False, default=0)
@@ -32,6 +34,8 @@ class UI:
     series_list_n_columns: int = field(init=False, default=5)
 
     def __attrs_post_init__(self):
+        self.setup_settings()
+
         dpg.create_context()
         dpg.create_viewport(title="hsistat", width=1920, height=1080, vsync=True)
         dpg.configure_app(wait_for_input=False)
@@ -64,6 +68,105 @@ class UI:
             logger.fatal(e)
         finally:
             self.stop()
+
+    def setup_settings(self):
+        self.settings = Settings(
+            spectra_normalized=Setting(
+                "libs_normalized",
+                False,
+                self.show_libs_plots,
+            ),
+            spectra_fit_to_axes=Setting(
+                "fit_to_axes",
+                False,
+                self.show_libs_plots,
+            ),
+            normzlized_from=Setting(
+                "normalize_from",
+                0,
+                self.show_libs_plots,
+            ),
+            normzlized_to=Setting(
+                "normalize_to",
+                -1,
+                self.show_libs_plots,
+            ),
+            baseline_removal_method=Setting(
+                "libs_baseline_corrected",
+                "SNIP",
+                self.show_libs_plots,
+            ),
+            baseline_clipped_to_zero=Setting(
+                "clip_baseline",
+                False,
+                self.show_libs_plots,
+            ),
+            baseline_max_half_window=Setting(
+                "max_half_window",
+                40,
+                self.show_libs_plots,
+            ),
+            baseline_filter_order=Setting(
+                "filter_order",
+                "2",
+                self.show_libs_plots,
+            ),
+            min_peak_height=Setting(
+                "peak_height_threshold_slider",
+                0.01,
+                self.refresh_all,
+            ),
+            min_peak_prominance=Setting(
+                "peak_prominance_threshold_slider",
+                0.01,
+                self.refresh_all,
+            ),
+            peak_smoothing_sigma=Setting(
+                "peak_smoothing_sigma_slider",
+                1,
+                self.refresh_all,
+            ),
+            selection_guides_shown=Setting(
+                "selection_guides_checkbox",
+                False,
+                self.toggle_selection_guides,
+            ),
+            region_subdivided=Setting(
+                "subdivide_selection_window_checkbox",
+                True,
+                self.refresh_fitting_windows,
+            ),
+            fitting_windows_shown=Setting(
+                "toggle_fitting_windows_checkbox",
+                False,
+                self.toggle_fitting_windows,
+            ),
+            peaks_shown=Setting(
+                "toggle_peaks_checkbox",
+                False,
+                self.toggle_peaks,
+            ),
+            fitting_x_threshold=Setting(
+                "fitting_windows_x_threshold",
+                8,
+                self.refresh_fitting_windows,
+            ),
+            fitting_y_threshold=Setting(
+                "fitting_windows_y_threshold",
+                0.001,
+                self.refresh_fitting_windows,
+            ),
+            fitting_y_threshold_type=Setting(
+                "fitting_windows_y_threshold_type",
+                "Relative",
+                self.change_fitting_windows_threshold_type,
+            ),
+            fitting_max_iterations=Setting(
+                "max_fit_iterations",
+                -1,
+                None,
+            ),
+        )
 
     def stop(self):
         dpg.stop_dearpygui()
@@ -179,8 +282,6 @@ class UI:
                         series.selected = False
 
                     self.show_libs_plots()
-                    self.refresh_fitting_windows()
-                    self.refresh_peaks()
 
     def series_right_click(self):
         series_rows = dpg.get_item_children("series_list_wrapper", slot=1)
@@ -352,15 +453,14 @@ class UI:
                     self.project.plotted_series_ids.discard(series.id)
                     dpg.delete_item(f"series_plot_{series.id}")
 
-        self.refresh_fitting_windows()
-        self.refresh_peaks()
-
         line_series = dpg.get_item_children("libs_y_axis", slot=1)
         assert isinstance(line_series, list)
         line_series_labels = [dpg.get_item_label(s) for s in line_series]
         index = index_natsorted(line_series_labels)
         sorted_line_series: list[int] = order_by_index(line_series, index)  # type: ignore
         dpg.reorder_items("libs_y_axis", slot=1, new_order=sorted_line_series)
+
+        self.refresh_all()
 
     def populate_series_list(self, skip_plot_update=False):
         dpg.delete_item("series_list_wrapper", children_only=True)
@@ -484,21 +584,23 @@ class UI:
         if dpg.does_item_exist("loading_indicator"):
             dpg.configure_item("loading_indicator", pos=(w // 2 - 100, h // 2 - 100))
 
-    def toggle_fitting_windows(self, state: bool):
-        if not state:
-            lines = dpg.get_item_children("libs_plots", slot=0)
-            if lines is None:
-                return
-            for peak in lines:
-                if dpg.get_item_type(peak) == "mvAppItemType::mvDragLine":
-                    if dpg.get_item_alias(peak) not in (
-                        "region_guide_start",
-                        "region_guide_end",
-                    ):
-                        dpg.delete_item(peak)
+    def toggle_fitting_windows(self):
+        state = self.settings.fitting_windows_shown.value
 
-        else:
-            with dpg.mutex():
+        with dpg.mutex():
+            if not state:
+                lines = dpg.get_item_children("libs_plots", slot=0)
+                if lines is None:
+                    return
+                for peak in lines:
+                    if dpg.get_item_type(peak) == "mvAppItemType::mvDragLine":
+                        if dpg.get_item_alias(peak) not in (
+                            "region_guide_start",
+                            "region_guide_end",
+                        ):
+                            dpg.delete_item(peak)
+
+            else:
                 for series_id, series in enumerate(self.project.selected_series):
                     spectrum = series.averaged
                     if None not in self.project.selected_region:
@@ -534,17 +636,18 @@ class UI:
                                 tag=f"{series.id}_fitting_window_{i+1}",
                             )
 
-    def toggle_peaks(self, state: bool):
-        if not state:
-            peaks = dpg.get_item_children("libs_plots", slot=0)
-            if peaks is None:
-                return
-            for peak in peaks:
-                if dpg.get_item_type(peak) == "mvAppItemType::mvDragPoint":
-                    dpg.delete_item(peak)
+    def toggle_peaks(self):
+        state = self.settings.peaks_shown.value
+        with dpg.mutex():
+            if not state:
+                peaks = dpg.get_item_children("libs_plots", slot=0)
+                if peaks is None:
+                    return
+                for peak in peaks:
+                    if dpg.get_item_type(peak) == "mvAppItemType::mvDragPoint":
+                        dpg.delete_item(peak)
 
-        else:
-            with dpg.mutex():
+            else:
                 for id, s in enumerate(self.project.selected_series):
                     spectrum = s.averaged
                     if None not in self.project.selected_region:
@@ -575,19 +678,21 @@ class UI:
                         )
 
     def refresh_fitting_windows(self):
-        if dpg.get_value("toggle_fitting_windows_checkbox"):
-            self.toggle_fitting_windows(False)
-            self.toggle_fitting_windows(True)
+        if self.settings.fitting_windows_shown.value:
+            self.settings.fitting_windows_shown.set(False)
+            self.settings.fitting_windows_shown.set(True)
 
     def refresh_peaks(self):
-        if dpg.get_value("toggle_peaks_checkbox"):
-            self.toggle_peaks(False)
-            self.toggle_peaks(True)
+        if self.settings.peaks_shown.value:
+            self.settings.peaks_shown.set(False)
+            self.settings.peaks_shown.set(True)
 
-    def change_fitting_windows_threshold_type(self, t_type):
-        if t_type == "Absolute":
+    def change_fitting_windows_threshold_type(
+        self, threshold_type: Literal["Absolute", "Relative"]
+    ):
+        if threshold_type == "Absolute":
             dpg.configure_item("fitting_windows_y_threshold", max_value=500)
-        elif t_type == "Relative":
+        elif threshold_type == "Relative":
             dpg.configure_item("fitting_windows_y_threshold", max_value=0.1)
             if dpg.get_value("fitting_windows_y_threshold") > 0.1:
                 dpg.set_value("fitting_windows_y_threshold", 0.1)
@@ -595,12 +700,14 @@ class UI:
         self.refresh_fitting_windows()
 
     def refresh_all(self):
-        self.refresh_fitting_windows()
-        self.refresh_peaks()
+        with dpg.mutex():
+            self.refresh_fitting_windows()
+            self.refresh_peaks()
 
-    def refresh_selection_guides(self, default_region: list[float] | None = None):
-        self.toggle_selection_guides(False)
-        self.toggle_selection_guides(True, default_region)
+    def refresh_selection_guides(self):
+        if self.settings.selection_guides_shown.value:
+            self.settings.selection_guides_shown.set(False)
+            self.settings.selection_guides_shown.set(True)
 
     def handle_region_guide(self, guide, start_or_end: Literal[0, 1]):
         start_value = dpg.get_value("region_guide_start")
@@ -618,26 +725,21 @@ class UI:
 
         dpg.set_value("plot_selected_region_text", region)
 
-        with dpg.mutex():
-            self.refresh_fitting_windows()
-            self.refresh_peaks()
+        self.refresh_all()
 
-    def toggle_selection_guides(
-        self, state: bool, default_region: list[float] | None = None
-    ):
+    def toggle_selection_guides(self):
+        state = self.settings.selection_guides_shown.value
+
         if not state:
             if dpg.does_item_exist("region_guide_start"):
                 dpg.delete_item("region_guide_start")
             if dpg.does_item_exist("region_guide_end"):
                 dpg.delete_item("region_guide_end")
-            self.project.selected_region = [None, None]
             dpg.set_value("plot_selected_region_text", "None")
-            with dpg.mutex():
-                self.refresh_fitting_windows()
-                self.refresh_peaks()
+            self.refresh_all()
             return
 
-        if default_region is None:
+        if None in self.project.selected_region:
             region_start, region_end = self.project.selected_region
             if len(self.project.selected_series) != 0:
                 limit_start, limit_end = self.project.selected_series[
@@ -650,8 +752,11 @@ class UI:
 
             if start is None or end is None:
                 return
+
+            self.project.selected_region = [start, end]
+
         else:
-            start, end = default_region[0], default_region[1]
+            start, end = self.project.selected_region
 
         dpg.add_drag_line(
             color=[0, 255, 0, 255],
@@ -675,8 +780,6 @@ class UI:
 
         region = f"{(start):.2f}..{(end):.2f} nm"
 
-        self.project.selected_region = [start, end]
-
         dpg.set_value("plot_selected_region_text", region)
 
         with dpg.mutex():
@@ -687,8 +790,11 @@ class UI:
         region = list(data[0:2])
         if not region == self.project.selected_region:
             with dpg.mutex():
-                self.refresh_selection_guides(region)
-                dpg.set_value("selection_guides_checkbox", True)
+                self.project.selected_region = region
+                if not self.settings.selection_guides_shown.value:
+                    self.settings.selection_guides_shown.set(True)
+
+                self.refresh_selection_guides()
 
     def setup_layout(self):
         with dpg.window(
@@ -805,9 +911,7 @@ class UI:
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Normalize".rjust(LABEL_PAD))
                                 dpg.add_checkbox(
-                                    tag="libs_normalized",
-                                    default_value=False,
-                                    callback=lambda _s, _d: self.show_libs_plots(),
+                                    **self.settings.spectra_normalized.as_dict
                                 )
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Normalize in range:".rjust(LABEL_PAD))
@@ -815,7 +919,6 @@ class UI:
                                     with dpg.group(horizontal=True):
                                         dpg.add_text("from".rjust(4))
                                         dpg.add_input_float(
-                                            tag="normalize_from",
                                             width=-1,
                                             max_value=10000,
                                             min_value=0,
@@ -823,9 +926,8 @@ class UI:
                                             format="%.1f",
                                             min_clamped=True,
                                             max_clamped=True,
-                                            default_value=1,
-                                            callback=lambda _s, _d: self.show_libs_plots(),
                                             on_enter=True,
+                                            **self.settings.normzlized_from.as_dict,
                                         )
                                     with dpg.group(horizontal=True):
                                         dpg.add_text("to".rjust(4))
@@ -837,33 +939,27 @@ class UI:
                                                 wrap=400,
                                             )
                                         dpg.add_input_float(
-                                            tag="normalize_to",
                                             width=-1,
                                             format="%.1f",
                                             step_fast=20,
                                             max_value=10000,
                                             min_value=-1,
-                                            default_value=-1,
                                             min_clamped=True,
                                             max_clamped=True,
                                             on_enter=True,
-                                            callback=lambda _s, _d: self.show_libs_plots(),
+                                            **self.settings.normzlized_to.as_dict,
                                         )
 
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Always fit to axes".rjust(LABEL_PAD))
                                 dpg.add_checkbox(
-                                    tag="fit_to_axes",
-                                    default_value=False,
-                                    callback=lambda _s, _d: self.show_libs_plots(),
+                                    **self.settings.spectra_fit_to_axes.as_dict
                                 )
 
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Remove baseline".rjust(LABEL_PAD))
 
                                 dpg.add_combo(
-                                    tag="libs_baseline_corrected",
-                                    default_value="SNIP",
                                     items=[
                                         "None",
                                         "SNIP",
@@ -871,74 +967,62 @@ class UI:
                                         "Polynomial",
                                     ],
                                     width=-1,
-                                    callback=lambda _s, _d: self.show_libs_plots(),
+                                    **self.settings.baseline_removal_method.as_dict,
                                 )
 
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Clip to zero".rjust(LABEL_PAD))
                                 dpg.add_checkbox(
-                                    default_value=True,
-                                    tag="clip_baseline",
-                                    callback=lambda _s, _d: self.show_libs_plots(),
+                                    **self.settings.baseline_clipped_to_zero.as_dict
                                 )
 
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Max half window".rjust(LABEL_PAD))
                                 dpg.add_slider_int(
-                                    default_value=40,
                                     width=-1,
-                                    tag="max_half_window",
                                     min_value=2,
                                     max_value=80,
                                     clamped=True,
-                                    callback=lambda _s, _d: self.show_libs_plots(),
+                                    **self.settings.baseline_max_half_window.as_dict,
                                 )
 
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Filter order".rjust(LABEL_PAD))
                                 dpg.add_combo(
                                     items=["2", "4", "6", "8"],
-                                    default_value="2",
                                     width=-1,
-                                    tag="filter_order",
-                                    callback=lambda _s, _d: self.show_libs_plots(),
+                                    **self.settings.baseline_filter_order.as_dict,
                                 )
 
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Min peak height".rjust(LABEL_PAD))
                                 dpg.add_slider_float(
-                                    default_value=0.01,
                                     min_value=0,
                                     max_value=0.2,
                                     format="%.3f",
                                     clamped=True,
-                                    tag="peak_height_threshold_slider",
-                                    callback=lambda s, d: self.refresh_all(),
                                     width=-1,
+                                    **self.settings.min_peak_height.as_dict,
                                 )
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Min peak prominance".rjust(LABEL_PAD))
                                 dpg.add_slider_float(
-                                    default_value=0.01,
                                     min_value=0,
                                     max_value=0.2,
                                     format="%.3f",
                                     clamped=True,
-                                    tag="peak_prominance_threshold_slider",
-                                    callback=lambda s, d: self.refresh_all(),
                                     width=-1,
+                                    **self.settings.min_peak_prominance.as_dict,
                                 )
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Peak smoothing sigma".rjust(LABEL_PAD))
                                 dpg.add_slider_float(
-                                    default_value=1,
                                     min_value=0.0,
                                     max_value=2,
                                     format="%.3f",
                                     clamped=True,
-                                    tag="peak_smoothing_sigma_slider",
-                                    callback=lambda s, d: self.refresh_all(),
                                     width=-1,
+                                    **self.settings.peak_smoothing_sigma.as_dict,
                                 )
 
                     with dpg.collapsing_header(label="Series", default_open=True):
@@ -962,10 +1046,7 @@ class UI:
                                     "Selected region:".rjust(LABEL_PAD),
                                 )
                                 dpg.add_checkbox(
-                                    tag="selection_guides_checkbox",
-                                    callback=lambda s, d: self.toggle_selection_guides(
-                                        d
-                                    ),
+                                    **self.settings.selection_guides_shown.as_dict
                                 )
                                 with dpg.tooltip(parent=dpg.last_item()):
                                     dpg.add_text("Show region guides")
@@ -974,9 +1055,7 @@ class UI:
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Subdivide region".rjust(LABEL_PAD))
                                 dpg.add_checkbox(
-                                    tag="subdivide_selection_window_checkbox",
-                                    default_value=True,
-                                    callback=lambda s, d: self.refresh_fitting_windows(),
+                                    **self.settings.region_subdivided.as_dict
                                 )
                                 dpg.add_button(
                                     label="Fit",
@@ -988,69 +1067,52 @@ class UI:
                                     "Show fitting windows".rjust(LABEL_PAD),
                                 )
                                 dpg.add_checkbox(
-                                    default_value=False,
-                                    tag="toggle_fitting_windows_checkbox",
-                                    callback=lambda s, d: self.toggle_fitting_windows(
-                                        d
-                                    ),
+                                    **self.settings.fitting_windows_shown.as_dict
                                 )
                             with dpg.group(horizontal=True):
                                 dpg.add_text(
                                     "Show peaks".rjust(LABEL_PAD),
                                 )
-                                dpg.add_checkbox(
-                                    default_value=False,
-                                    tag="toggle_peaks_checkbox",
-                                    callback=lambda s, d: self.toggle_peaks(d),
-                                )
+                                dpg.add_checkbox(**self.settings.peaks_shown.as_dict)
                             with dpg.group(horizontal=True):
                                 dpg.add_text(
                                     "X Window threshold".rjust(LABEL_PAD),
                                 )
                                 dpg.add_slider_float(
-                                    default_value=8,
                                     min_value=0,
                                     max_value=40,
                                     format="%.2f",
                                     clamped=True,
-                                    tag="fitting_windows_x_threshold",
-                                    callback=lambda s, d: self.refresh_fitting_windows(),
                                     width=-1,
+                                    **self.settings.fitting_x_threshold.as_dict,
                                 )
                             with dpg.group(horizontal=True):
                                 dpg.add_text(
                                     "Y Window threshold".rjust(LABEL_PAD),
                                 )
                                 dpg.add_slider_float(
-                                    default_value=0.001,
                                     min_value=0,
                                     max_value=0.2,
                                     format="%.3f",
                                     clamped=True,
-                                    tag="fitting_windows_y_threshold",
-                                    callback=lambda s, d: self.refresh_fitting_windows(),
                                     width=-1,
+                                    **self.settings.fitting_y_threshold.as_dict,
                                 )
                             with dpg.group(horizontal=True):
                                 dpg.add_text("".rjust(LABEL_PAD))
                                 dpg.add_combo(
-                                    tag="fitting_windows_y_threshold_type",
                                     items=["Absolute", "Relative"],
-                                    default_value="Relative",
                                     width=-1,
-                                    callback=lambda s, d: self.change_fitting_windows_threshold_type(
-                                        d
-                                    ),
+                                    **self.settings.fitting_y_threshold_type.as_dict,
                                 )
 
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Max fit iterations".rjust(LABEL_PAD))
                                 dpg.add_input_int(
-                                    tag="max_fit_iterations",
-                                    default_value=-1,
                                     min_value=-1,
                                     width=-1,
                                     min_clamped=True,
+                                    **self.settings.fitting_max_iterations.as_dict,
                                 )
 
                 with dpg.child_window(border=False, width=-1, tag="data"):

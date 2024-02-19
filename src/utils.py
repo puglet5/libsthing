@@ -296,6 +296,7 @@ class Spectrum:
                     parse_options=PA_PARSE_OPTIONS,
                     convert_options=PA_CONVERT_OPTIONS,
                 ),
+                dtype=np.float32,
             )
         else:
             x = self.common_x
@@ -306,6 +307,7 @@ class Spectrum:
                     parse_options=PA_PARSE_OPTIONS,
                     convert_options=PA_CONVERT_OPTIONS_SKIP_X,
                 ),
+                dtype=np.float32,
             )
 
             return np.c_[x, y]
@@ -770,7 +772,7 @@ class Project:
     series_dirs: list[Path] = field(init=False, factory=list)
     series: Mapping[str, Series] = field(init=False, factory=list)
     plotted_series_ids: set[str] = field(init=False, default=set())
-    selected_region: list[float] | list[None] = field(init=False, default=[None, None])
+    selected_region: list[float | None] = field(init=False, default=[None, None])
 
     def __attrs_post_init__(self):
         self.validate_directory()
