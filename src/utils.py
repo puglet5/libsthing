@@ -362,7 +362,7 @@ class Spectrum:
         baseline_removal: Literal[
             "None", "SNIP", "Adaptive minmax", "Polynomial"
         ] = "SNIP",
-        baseline_params: dict = {},
+        baseline_params: dict[str, int] = {},
     ):
         if (data := self.raw_spectral_data) is None:
             raise ValueError
@@ -402,7 +402,7 @@ class Spectrum:
         region: Window | None = None,
         height=0.005,
         prominance=0.001,
-        smoothing_sigma=1,
+        smoothing_sigma=1.0,
         y: npt.NDArray | None = None,
     ):
         if not isinstance(y, np.ndarray):

@@ -72,97 +72,97 @@ class UI:
     def setup_settings(self):
         self.settings = Settings(
             spectra_normalized=Setting(
-                "libs_normalized",
+                "settings_spectra_normalized",
                 False,
                 self.show_libs_plots,
             ),
             spectra_fit_to_axes=Setting(
-                "fit_to_axes",
+                "settings_spectra_fit_to_axes",
                 False,
                 self.show_libs_plots,
             ),
-            normzlized_from=Setting(
-                "normalize_from",
+            normalized_from=Setting(
+                "settings_normalized_from",
                 0,
                 self.show_libs_plots,
             ),
-            normzlized_to=Setting(
-                "normalize_to",
+            normalized_to=Setting(
+                "settings_normalized_to",
                 -1,
                 self.show_libs_plots,
             ),
             baseline_removal_method=Setting(
-                "libs_baseline_corrected",
+                "settings_baseline_removal_method",
                 "SNIP",
                 self.show_libs_plots,
             ),
             baseline_clipped_to_zero=Setting(
-                "clip_baseline",
+                "settings_baseline_clipped_to_zero",
                 False,
                 self.show_libs_plots,
             ),
             baseline_max_half_window=Setting(
-                "max_half_window",
+                "settings_baseline_max_half_window",
                 40,
                 self.show_libs_plots,
             ),
             baseline_filter_order=Setting(
-                "filter_order",
+                "settings_baseline_filter_order",
                 "2",
                 self.show_libs_plots,
             ),
             min_peak_height=Setting(
-                "peak_height_threshold_slider",
+                "settings_min_peak_height",
                 0.01,
                 self.refresh_all,
             ),
             min_peak_prominance=Setting(
-                "peak_prominance_threshold_slider",
+                "settings_min_peak_prominance",
                 0.01,
                 self.refresh_all,
             ),
             peak_smoothing_sigma=Setting(
-                "peak_smoothing_sigma_slider",
+                "settings_peak_smoothing_sigma",
                 1,
                 self.refresh_all,
             ),
             selection_guides_shown=Setting(
-                "selection_guides_checkbox",
+                "settings_selection_guides_shown",
                 False,
                 self.toggle_selection_guides,
             ),
             region_subdivided=Setting(
-                "subdivide_selection_window_checkbox",
+                "settings_region_subdivided",
                 True,
                 self.refresh_fitting_windows,
             ),
             fitting_windows_shown=Setting(
-                "toggle_fitting_windows_checkbox",
+                "settings_fitting_windows_shown",
                 False,
                 self.toggle_fitting_windows,
             ),
             peaks_shown=Setting(
-                "toggle_peaks_checkbox",
+                "settings_peaks_shown",
                 False,
                 self.toggle_peaks,
             ),
             fitting_x_threshold=Setting(
-                "fitting_windows_x_threshold",
+                "settings_fitting_x_threshold",
                 8,
                 self.refresh_fitting_windows,
             ),
             fitting_y_threshold=Setting(
-                "fitting_windows_y_threshold",
+                "settings_fitting_y_threshold",
                 0.001,
                 self.refresh_fitting_windows,
             ),
             fitting_y_threshold_type=Setting(
-                "fitting_windows_y_threshold_type",
+                "settings_fitting_y_threshold_type",
                 "Relative",
                 self.change_fitting_windows_threshold_type,
             ),
             fitting_max_iterations=Setting(
-                "max_fit_iterations",
+                "settings_fitting_max_iterations",
                 -1,
                 None,
             ),
@@ -364,17 +364,17 @@ class UI:
             self.show_libs_plots()
 
     def show_libs_plots(self):
-        range_from = dpg.get_value("normalize_from")
-        range_to = dpg.get_value("normalize_to")
+        range_from = self.settings.normalized_from.value
+        range_to = self.settings.normalized_to.value
         if range_to < range_from and range_to != -1:
-            dpg.set_value("normalize_to", range_from)
+            self.settings.normalized_to.set(range_from)
             range_to = range_from
 
-        normalized = dpg.get_value("libs_normalized")
-        baseline_removal = dpg.get_value("libs_baseline_corrected")
+        normalized = self.settings.spectra_normalized.value
+        baseline_removal = self.settings.baseline_removal_method.value
         normalization_range = (
-            dpg.get_value("normalize_from"),
-            dpg.get_value("normalize_to"),
+            self.settings.normalized_from.value,
+            self.settings.normalized_to.value,
         )
 
         with dpg.mutex():
@@ -385,10 +385,10 @@ class UI:
                     normalized,
                     normalization_range=normalization_range,
                     baseline_removal=baseline_removal,
-                    baseline_clip=dpg.get_value("clip_baseline"),
+                    baseline_clip=self.settings.baseline_clipped_to_zero.value,
                     baseline_params={
-                        "max_half_window": dpg.get_value("max_half_window"),
-                        "filter_order": int(dpg.get_value("filter_order")),
+                        "max_half_window": self.settings.baseline_max_half_window.value,
+                        "filter_order": int(self.settings.baseline_filter_order.value),
                     },
                 )
                 x, y = spectrum.xy.tolist()
@@ -442,7 +442,7 @@ class UI:
 
                 self.project.plotted_series_ids.add(series.id)
 
-            if dpg.get_value("fit_to_axes"):
+            if self.settings.spectra_fit_to_axes.value:
                 dpg.fit_axis_data("libs_x_axis")
                 dpg.fit_axis_data("libs_y_axis")
 
@@ -548,10 +548,10 @@ class UI:
 
     def perform_fit(self):
         spectrum = self.project.selected_series[0].averaged
-        x_threshold = dpg.get_value("fitting_windows_x_threshold")
-        y_threshold = dpg.get_value("fitting_windows_y_threshold")
-        threshold_type = dpg.get_value("fitting_windows_y_threshold_type")
-        subdivide = dpg.get_value("subdivide_selection_window_checkbox")
+        x_threshold = self.settings.fitting_x_threshold.value
+        y_threshold = self.settings.fitting_y_threshold.value
+        threshold_type = self.settings.fitting_y_threshold_type.value
+        subdivide = self.settings.region_subdivided.value
         if None not in self.project.selected_region:
             region: Window = self.project.selected_region  # type: ignore
         else:
@@ -567,7 +567,7 @@ class UI:
         else:
             spectrum.fitting_windows = [region]
 
-        max_iterations = dpg.get_value("max_fit_iterations")
+        max_iterations = self.settings.fitting_max_iterations.value
         spectrum.fit_windows_parallel(
             spectrum.fitting_windows, max_iterations=max_iterations
         )
@@ -609,10 +609,10 @@ class UI:
                     else:
                         region = spectrum.x_limits
 
-                    x_threshold = dpg.get_value("fitting_windows_x_threshold")
-                    y_threshold = dpg.get_value("fitting_windows_y_threshold")
-                    threshold_type = dpg.get_value("fitting_windows_y_threshold_type")
-                    subdivide = dpg.get_value("subdivide_selection_window_checkbox")
+                    x_threshold = self.settings.fitting_x_threshold.value
+                    y_threshold = self.settings.fitting_y_threshold.value
+                    threshold_type = self.settings.fitting_y_threshold_type.value
+                    subdivide = self.settings.region_subdivided.value
 
                     if subdivide:
                         spectrum.generate_fitting_windows(
@@ -656,9 +656,9 @@ class UI:
                     else:
                         region = spectrum.x_limits
 
-                    height = dpg.get_value("peak_height_threshold_slider")
-                    prominance = dpg.get_value("peak_prominance_threshold_slider")
-                    sigma = dpg.get_value("peak_smoothing_sigma_slider")
+                    height = self.settings.min_peak_height.value
+                    prominance = self.settings.min_peak_prominance.value
+                    sigma = self.settings.peak_smoothing_sigma.value
 
                     spectrum.find_peaks(
                         region,
@@ -688,15 +688,14 @@ class UI:
             self.settings.peaks_shown.set(False)
             self.settings.peaks_shown.set(True)
 
-    def change_fitting_windows_threshold_type(
-        self, threshold_type: Literal["Absolute", "Relative"]
-    ):
+    def change_fitting_windows_threshold_type(self):
+        threshold_type = self.settings.fitting_y_threshold_type.value
         if threshold_type == "Absolute":
-            dpg.configure_item("fitting_windows_y_threshold", max_value=500)
+            dpg.configure_item(self.settings.fitting_y_threshold.tag, max_value=500)
         elif threshold_type == "Relative":
-            dpg.configure_item("fitting_windows_y_threshold", max_value=0.1)
-            if dpg.get_value("fitting_windows_y_threshold") > 0.1:
-                dpg.set_value("fitting_windows_y_threshold", 0.1)
+            dpg.configure_item(self.settings.fitting_y_threshold.tag, max_value=0.1)
+            if self.settings.fitting_y_threshold.value > 0.1:
+                self.settings.fitting_y_threshold.set(0.1)
 
         self.refresh_fitting_windows()
 
@@ -931,7 +930,7 @@ class UI:
                                             min_clamped=True,
                                             max_clamped=True,
                                             on_enter=True,
-                                            **self.settings.normzlized_from.as_dict,
+                                            **self.settings.normalized_from.as_dict,
                                         )
                                     with dpg.group(horizontal=True):
                                         dpg.add_text("to".rjust(4))
@@ -951,7 +950,7 @@ class UI:
                                             min_clamped=True,
                                             max_clamped=True,
                                             on_enter=True,
-                                            **self.settings.normzlized_to.as_dict,
+                                            **self.settings.normalized_to.as_dict,
                                         )
 
                             with dpg.group(horizontal=True):

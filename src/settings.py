@@ -48,8 +48,8 @@ class Setting[T]:
 class Settings:
     spectra_normalized: Setting[bool]
     spectra_fit_to_axes: Setting[bool]
-    normzlized_from: Setting[float]
-    normzlized_to: Setting[float]
+    normalized_from: Setting[float]
+    normalized_to: Setting[float]
     baseline_removal_method: Setting[
         Literal["None", "SNIP", "Adaptive minmax", "Polynomial"]
     ]
