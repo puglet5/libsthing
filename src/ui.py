@@ -346,7 +346,7 @@ class UI:
             return
 
         self.show_libs_plots()
-        self.populate_series_list()
+        self.populate_series_list(initial=True)
         dpg.fit_axis_data("libs_x_axis")
         dpg.fit_axis_data("libs_y_axis")
 
@@ -462,7 +462,7 @@ class UI:
 
         self.refresh_all()
 
-    def populate_series_list(self, skip_plot_update=False):
+    def populate_series_list(self, skip_plot_update=False, initial=False):
         dpg.delete_item("series_list_wrapper", children_only=True)
 
         for i in range(len(self.project.series) // self.series_list_n_columns + 1):
@@ -471,7 +471,8 @@ class UI:
             )
 
         for i, (s_id, series) in enumerate(self.project.series.items()):
-            series.selected = True
+            if initial:
+                series.selected = True
             with dpg.group(
                 horizontal=False,
                 parent=f"series_row_{i//self.series_list_n_columns}",
@@ -701,8 +702,9 @@ class UI:
 
     def refresh_all(self):
         with dpg.mutex():
-            self.refresh_fitting_windows()
             self.refresh_peaks()
+            self.refresh_fitting_windows()
+            self.refresh_selection_guides()
 
     def refresh_selection_guides(self):
         if self.settings.selection_guides_shown.value:
@@ -736,6 +738,8 @@ class UI:
             if dpg.does_item_exist("region_guide_end"):
                 dpg.delete_item("region_guide_end")
             dpg.set_value("plot_selected_region_text", "None")
+            if not dpg.is_plot_queried("libs_plots"):
+                self.project.selected_region = [None, None]
             self.refresh_all()
             return
 
