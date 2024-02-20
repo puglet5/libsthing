@@ -20,6 +20,7 @@ from typing import (
     ParamSpec,
     Tuple,
     TypeVar,
+    assert_never,
 )
 
 import coloredlogs
@@ -38,6 +39,8 @@ from pybaselines import Baseline
 from scipy.interpolate import UnivariateSpline
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import find_peaks, savgol_filter
+
+from settings import BaselineRemoval
 
 PA_READ_OPTIONS = csv.ReadOptions(skip_rows=2, autogenerate_column_names=True)
 PA_PARSE_OPTIONS = csv.ParseOptions(delimiter="\t", quote_char=False)
@@ -118,29 +121,6 @@ def loading_indicator(
                 label=f"{message}: 100%".center(30),
             )
             threading.Timer(0.5, hide_loading_indicator).start()
-
-    return _wrapper  # type:ignore
-
-
-def progress_bar(
-    f: Callable[P, Generator[float, None, None]]
-) -> Callable[P, T]:  # type:ignore
-    @wraps(f)
-    def _wrapper(*args, **kwargs):
-        progress_generator = f(*args, **kwargs)
-        try:
-            while True:
-                progress = next(progress_generator)
-                dpg.set_value("progress_bar", progress)
-                dpg.configure_item("progress_bar", overlay=f"{progress*100:.0f}%")
-        except StopIteration as result:
-            dpg.set_value("progress_bar", 0)
-            dpg.configure_item("progress_bar", overlay="")
-            return result.value
-        except TypeError:
-            dpg.set_value("progress_bar", 0)
-            dpg.configure_item("progress_bar", overlay="")
-            return None
 
     return _wrapper  # type:ignore
 
@@ -255,7 +235,7 @@ class Peak:
         self.amplitude = area / self.sigma * 0.55
 
 
-@define
+@define(auto_attribs=True)
 class Spectrum:
     file: Path | None = field(default=None)
     raw_spectral_data: npt.NDArray | None = field(default=None, repr=False)
@@ -339,16 +319,20 @@ class Spectrum:
     def baseline(
         self,
         y: np.ndarray,
-        method: Literal["SNIP", "Adaptive minmax", "Polynomial"],
+        method: BaselineRemoval,
         method_params: dict,
     ) -> np.ndarray:
         baseline_fitter = Baseline(x_data=self.x)
-        if method == "SNIP":
+        if method == BaselineRemoval.SNIP:
             bkg = baseline_fitter.snip(y, **method_params)[0]
-        if method == "Adaptive minmax":
+        elif method == BaselineRemoval.AMM:
             bkg = baseline_fitter.adaptive_minmax(y)[0]
-        if method == "Polynomial":
+        elif method == BaselineRemoval.POLY:
             bkg = baseline_fitter.penalized_poly(y, poly_order=8)[0]
+        elif method == BaselineRemoval.NONE:
+            return np.zeros_like(y)
+        else:
+            assert_never(method)
 
         return bkg
 
@@ -357,9 +341,7 @@ class Spectrum:
         normalized=False,
         normalization_range: Window = (1, -1),
         baseline_clip=True,
-        baseline_removal: Literal[
-            "None", "SNIP", "Adaptive minmax", "Polynomial"
-        ] = "SNIP",
+        baseline_removal: BaselineRemoval = BaselineRemoval.SNIP,
         baseline_params: dict[str, int] = {},
     ):
         if (data := self.raw_spectral_data) is None:
@@ -367,7 +349,7 @@ class Spectrum:
 
         y = data.T[1]
 
-        if baseline_removal != "None":
+        if baseline_removal != BaselineRemoval.NONE:
             bkg = self.baseline(
                 y, method=baseline_removal, method_params=baseline_params
             )
@@ -725,7 +707,7 @@ class Sample:
         self.spectra = [Spectrum.from_file(f, common_x=x) for f in specra_files]
         self.name = self.directory.name
 
-    def averaged(self, drop_first: int = 0):
+    def averaged(self, drop_first: int):
         data = np.array([s.raw_spectral_data for s in self.spectra[drop_first:]])
         return Spectrum.from_data(data.mean(axis=0))
 
@@ -738,16 +720,18 @@ class Series:
     id: str = field(init=False, default=0)
     selected: bool = field(init=False, default=True)
     color: list[int] | None = field(init=False, default=None)
+    common_x: bool = field(default=True)
+    sample_drop_first: int = field(default=0)
     _averaged: Spectrum | None = field(init=False, default=None)
 
     def __attrs_post_init__(self):
-        self.id = str(uuid.uuid4())
+        self.id = uuid.uuid4().urn
 
         child_dirs = natsorted(d for d in self.directory.iterdir() if d.is_dir())
         if not child_dirs:
-            self.samples = [Sample(self.directory)]
+            self.samples = [Sample(self.directory, self.common_x)]
         else:
-            self.samples = [Sample(d) for d in child_dirs]
+            self.samples = [Sample(d, self.common_x) for d in child_dirs]
 
         if self.name is None:
             self.name = "_".join([self.directory.parent.name, self.directory.name])
@@ -755,7 +739,9 @@ class Series:
     @property
     def averaged(self):
         if self._averaged is None:
-            spectra: list[Spectrum] = flatten([s.spectra for s in self.samples])
+            spectra: list[Spectrum] = flatten(
+                [s.averaged(self.sample_drop_first) for s in self.samples]
+            )
             data = np.array([s.raw_spectral_data for s in spectra])
             spectrum = Spectrum.from_data(data.mean(axis=0))
             self._averaged = spectrum
@@ -771,10 +757,14 @@ class Project:
     series: Mapping[str, Series] = field(init=False, factory=list)
     plotted_series_ids: set[str] = field(init=False, default=set())
     selected_region: list[float | None] = field(init=False, default=[None, None])
+    common_x: bool = field(default=False)
+    sample_drop_first: int = field(default=0)
 
     def __attrs_post_init__(self):
         self.validate_directory()
-        self.load_series()
+        self.load_series(
+            common_x=self.common_x, sample_drop_first=self.sample_drop_first
+        )
 
     def validate_directory(self):
         if not self.directory.exists():
@@ -797,11 +787,17 @@ class Project:
 
     @log_exec_time
     @partial(loading_indicator, message="Loading series")
-    def load_series(self):
+    def load_series(self, common_x, sample_drop_first):
         with Pool(processes=CPU_COUNT) as pool:
             pool.restart()
             try:
-                result = pool.amap(Series, self.series_dirs, chunksize=1)
+                result = pool.amap(
+                    partial(
+                        Series, common_x=common_x, sample_drop_first=sample_drop_first
+                    ),
+                    self.series_dirs,
+                    chunksize=1,
+                )
                 while not result.ready():
                     yield (1 - result._number_left / len(self.series_dirs)) * 100
                     time.sleep(LOADING_INDICATOR_FETCH_DELAY_S)

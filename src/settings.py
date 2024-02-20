@@ -1,11 +1,21 @@
-import inspect
-from functools import wraps
-from typing import Any, Callable, Literal
+from enum import StrEnum
+from typing import Any, Callable, Literal, TypedDict
 
 import dearpygui.dearpygui as dpg
 from attrs import define, field
 
-from utils import Window
+
+class BaselineRemoval(StrEnum):
+    SNIP = "SNIP"
+    NONE = "None"
+    POLY = "Polynomial"
+    AMM = "Apaptive minmax"
+
+
+class DPGWidgetArgs[T](TypedDict):
+    tag: int | str
+    default_value: T
+    callback: Callable
 
 
 @define
@@ -18,7 +28,7 @@ class Setting[T]:
     def __attrs_post_init__(self):
         self.value = self.default_value
 
-    def update(self):
+    def _update(self):
         self.value = dpg.get_value(self.tag)
         if self.callback is not None:
             self.callback()
@@ -31,11 +41,13 @@ class Setting[T]:
 
     @property
     def as_dict(self):
-        return {
+        args: DPGWidgetArgs[T] = {
             "tag": self.tag,
             "default_value": self.default_value,
-            "callback": self.update,
+            "callback": self._update,
         }
+
+        return args
 
     def disable(self):
         dpg.disable_item(self.tag)
@@ -46,13 +58,13 @@ class Setting[T]:
 
 @define
 class Settings:
+    project_common_x: Setting[bool]
+    sample_drop_first: Setting[int]
     spectra_normalized: Setting[bool]
     spectra_fit_to_axes: Setting[bool]
     normalized_from: Setting[float]
     normalized_to: Setting[float]
-    baseline_removal_method: Setting[
-        Literal["None", "SNIP", "Adaptive minmax", "Polynomial"]
-    ]
+    baseline_removal_method: Setting[BaselineRemoval]
     baseline_clipped_to_zero: Setting[bool]
     baseline_max_half_window: Setting[int]
     baseline_filter_order: Setting[Literal["2", "4", "6", "8"]]

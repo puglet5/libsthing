@@ -1,5 +1,6 @@
 import gc
 import logging
+import math
 from functools import partial
 from operator import call
 from pathlib import Path
@@ -11,7 +12,7 @@ import numpy as np
 from attrs import define, field
 from natsort import index_natsorted, natsorted, order_by_index
 
-from settings import Setting, Settings
+from settings import BaselineRemoval, Setting, Settings
 from src.utils import Project, Series, Window, loading_indicator, log_exec_time
 
 logger = logging.getLogger(__name__)
@@ -21,7 +22,7 @@ TOOLTIP_DELAY_SEC = 0.1
 LABEL_PAD = 23
 
 
-@define(repr=False, eq=False)
+@define
 class UI:
     project: Project = field(init=False)
     settings: Settings = field(init=False)
@@ -71,6 +72,14 @@ class UI:
 
     def setup_settings(self):
         self.settings = Settings(
+            project_common_x=Setting(
+                "settings_project_common_x",
+                True,
+                None,
+            ),
+            sample_drop_first=Setting(
+                "settings_sample_drop_first", 10, self.setup_project
+            ),
             spectra_normalized=Setting(
                 "settings_spectra_normalized",
                 False,
@@ -93,7 +102,7 @@ class UI:
             ),
             baseline_removal_method=Setting(
                 "settings_baseline_removal_method",
-                "SNIP",
+                BaselineRemoval.SNIP,
                 self.show_libs_plots,
             ),
             baseline_clipped_to_zero=Setting(
@@ -340,7 +349,11 @@ class UI:
                 return
 
             project_dir = Path(dir_str)
-            self.project = Project(project_dir)
+            common_x = self.settings.project_common_x.value
+            sample_drop_first = self.settings.sample_drop_first.value
+            self.project = Project(
+                project_dir, common_x=common_x, sample_drop_first=sample_drop_first
+            )
         except ValueError:
             dpg.show_item("project_directory_error_message")
             return
@@ -349,6 +362,13 @@ class UI:
         self.populate_series_list(initial=True)
         dpg.fit_axis_data("libs_x_axis")
         dpg.fit_axis_data("libs_y_axis")
+        series_window_height = (
+            math.ceil(((len(self.project.series) / self.series_list_n_columns))) * 100
+        )
+        dpg.configure_item(
+            "sidebar_series",
+            height=series_window_height,
+        )
 
     def directory_picker_callback(self, _sender, data):
         dpg.set_value("project_directory", data["file_path_name"])
@@ -726,7 +746,9 @@ class UI:
 
         dpg.set_value("plot_selected_region_text", region)
 
-        self.refresh_all()
+        with dpg.mutex():
+            self.refresh_peaks()
+            self.refresh_fitting_windows()
 
     def toggle_selection_guides(self):
         state = self.settings.selection_guides_shown.value
@@ -869,10 +891,6 @@ class UI:
                 with dpg.child_window(
                     border=False, width=self.sidebar_width, tag="sidebar"
                 ):
-                    dpg.add_progress_bar(tag="progress_bar", width=-1, height=19)
-                    with dpg.tooltip("progress_bar", delay=TOOLTIP_DELAY_SEC):
-                        dpg.add_text("Current operation progress")
-
                     with dpg.collapsing_header(label="Project", default_open=True):
                         with dpg.child_window(
                             width=-1,
@@ -894,6 +912,7 @@ class UI:
                                         "project_directory_picker"
                                     ),
                                 )
+
                             with dpg.group(horizontal=True):
                                 dpg.add_text(
                                     default_value="Chosen directory is not valid!".rjust(
@@ -902,6 +921,23 @@ class UI:
                                     tag="project_directory_error_message",
                                     show=False,
                                     color=(200, 20, 20, 255),
+                                )
+
+                            with dpg.group(horizontal=True):
+                                dpg.add_text("Assume common x values".rjust(LABEL_PAD))
+                                dpg.add_checkbox(
+                                    **self.settings.project_common_x.as_dict
+                                )
+                            with dpg.group(horizontal=True):
+                                dpg.add_text("Drop first in samples".rjust(LABEL_PAD))
+                                dpg.add_input_int(
+                                    width=-1,
+                                    on_enter=True,
+                                    min_value=0,
+                                    max_value=40,
+                                    min_clamped=True,
+                                    max_clamped=True,
+                                    **self.settings.sample_drop_first.as_dict,
                                 )
 
                     with dpg.collapsing_header(label="Plots", default_open=True):
@@ -1030,8 +1066,9 @@ class UI:
                     with dpg.collapsing_header(label="Series", default_open=True):
                         with dpg.child_window(
                             width=-1,
-                            height=300,
+                            height=100,
                             no_scrollbar=True,
+                            tag="sidebar_series",
                         ):
                             with dpg.group(horizontal=False, tag="series_list_wrapper"):
                                 pass
@@ -1126,7 +1163,7 @@ class UI:
                             query_button=dpg.mvMouseButton_Left,
                             query_mod=1,
                             callback=self.plot_query_callback,
-                            height=800,
+                            height=-1,
                             width=-1,
                         ):
                             dpg.add_plot_legend(location=4)
@@ -1140,23 +1177,6 @@ class UI:
                                 label="Line Intensity (arb. unit of energy flux)",
                                 tag="libs_y_axis",
                             )
-
-                    with dpg.plot(
-                        tag="calibration_plots",
-                        crosshairs=True,
-                        anti_aliased=True,
-                        height=-1,
-                        width=-1,
-                    ):
-                        dpg.add_plot_legend(location=9)
-                        dpg.add_plot_axis(
-                            dpg.mvXAxis,
-                            label="",
-                            tag="calibration_x_axis",
-                        )
-                        dpg.add_plot_axis(
-                            dpg.mvYAxis, label="", tag="calibration_y_axis"
-                        )
 
         with dpg.file_dialog(
             modal=True,
