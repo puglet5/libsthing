@@ -221,7 +221,6 @@ class Peak:
         if curr_x_index - start_x_index == 1:
             curr_x_index = start_x_index
             while curr_x_index >= 0:
-
                 if win_y[curr_x_index] > win_y[start_x_index]:
                     break
                 if win_y[curr_x_index] <= 0.5 * win_y[start_x_index]:
@@ -270,7 +269,6 @@ class Spectrum:
     fitted: npt.NDArray | None = field(init=False, default=None)
 
     def __attrs_post_init__(self):
-
         if self.raw_spectral_data is None and self.file is not None:
             self.raw_spectral_data = self.spec_to_numpy()
 

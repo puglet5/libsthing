@@ -874,7 +874,6 @@ class UI:
                         dpg.add_text("Current operation progress")
 
                     with dpg.collapsing_header(label="Project", default_open=True):
-
                         with dpg.child_window(
                             width=-1,
                             height=200,
@@ -1043,7 +1042,6 @@ class UI:
                             height=-1,
                             no_scrollbar=True,
                         ):
-
                             with dpg.group(horizontal=True):
                                 dpg.add_text(
                                     "Selected region:".rjust(LABEL_PAD),
