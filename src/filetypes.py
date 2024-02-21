@@ -1,13 +1,9 @@
 import logging
 import re
 from io import BytesIO
-from pathlib import Path
-from typing import Pattern, Tuple, TypedDict
+from typing import Pattern, TypedDict
 
 import chardet
-import numpy as np
-import pyarrow as pa
-from pyarrow import csv
 
 logger = logging.getLogger(__name__)
 

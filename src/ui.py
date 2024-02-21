@@ -1,19 +1,16 @@
 import gc
 import logging
 import math
-from functools import partial
-from operator import call
 from pathlib import Path
-from re import L
 from typing import Literal
 
 import dearpygui.dearpygui as dpg
 import numpy as np
 from attrs import define, field
-from natsort import index_natsorted, natsorted, order_by_index
+from natsort import index_natsorted, order_by_index
 
 from settings import BaselineRemoval, Setting, Settings
-from src.utils import Project, Series, Window, loading_indicator, log_exec_time
+from src.utils import Project, Window
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +75,9 @@ class UI:
                 None,
             ),
             sample_drop_first=Setting(
-                "settings_sample_drop_first", 10, self.setup_project
+                "settings_sample_drop_first",
+                10,
+                self.setup_project,
             ),
             spectra_normalized=Setting(
                 "settings_spectra_normalized",
@@ -177,6 +176,11 @@ class UI:
             ),
         )
 
+    def reset_settings(self):
+        self.settings.reset()
+        self.show_libs_plots()
+        self.refresh_all()
+
     def stop(self):
         dpg.stop_dearpygui()
         dpg.destroy_context()
@@ -248,6 +252,9 @@ class UI:
             dpg.add_mouse_click_handler(
                 dpg.mvMouseButton_Right,
                 callback=lambda s, d: self.series_right_click(),
+            )
+            dpg.add_key_press_handler(
+                dpg.mvKey_F11, callback=lambda: dpg.toggle_viewport_fullscreen()
             )
 
         with dpg.item_handler_registry(tag="window_resize_handler"):
@@ -326,7 +333,8 @@ class UI:
 
                         dpg.add_text(f"Directory: {series.directory}")
                         dpg.add_text(
-                            f"{len(series.samples)} samples with {np.sum([len(s.spectra) for s in series.samples])} spectra total"
+                            f"{len(series.samples)} samples with \
+                                {np.sum([len(s.spectra) for s in series.samples])} spectra total"
                         )
 
     def bind_item_handlers(self):
@@ -398,7 +406,7 @@ class UI:
         )
 
         with dpg.mutex():
-            for id, series in enumerate(self.project.selected_series):
+            for i, series in enumerate(self.project.selected_series):
                 spectrum = series.averaged
                 assert spectrum.raw_spectral_data is not None
                 spectrum.process_spectral_data(
@@ -419,7 +427,7 @@ class UI:
                             np.array(
                                 dpg.sample_colormap(
                                     dpg.mvPlotColormap_Spectral,
-                                    id / (len(self.project.series)),
+                                    i / (len(self.project.series)),
                                 )
                             )
                             * [255, 255, 255, 255]
@@ -452,9 +460,7 @@ class UI:
                         default_value=series.color,
                         parent=f"series_plot_{series.id}",
                         user_data=series.id,
-                        callback=lambda sender, data: self.set_series_color(
-                            sender, data
-                        ),
+                        callback=self.set_series_color,
                         alpha_preview=dpg.mvColorEdit_AlphaPreviewHalf,
                         display_mode=dpg.mvColorEdit_rgb,
                         input_mode=dpg.mvColorEdit_input_rgb,
@@ -723,7 +729,6 @@ class UI:
         with dpg.mutex():
             self.refresh_peaks()
             self.refresh_fitting_windows()
-            self.refresh_selection_guides()
 
     def refresh_selection_guides(self):
         if self.settings.selection_guides_shown.value:
@@ -746,9 +751,7 @@ class UI:
 
         dpg.set_value("plot_selected_region_text", region)
 
-        with dpg.mutex():
-            self.refresh_peaks()
-            self.refresh_fitting_windows()
+        self.refresh_all()
 
     def toggle_selection_guides(self):
         state = self.settings.selection_guides_shown.value
@@ -807,9 +810,7 @@ class UI:
 
         dpg.set_value("plot_selected_region_text", region)
 
-        with dpg.mutex():
-            self.refresh_fitting_windows()
-            self.refresh_peaks()
+        self.refresh_all()
 
     def plot_query_callback(self, sender, data):
         region = list(data[0:2])
@@ -838,6 +839,9 @@ class UI:
 
                 with dpg.menu(label="Edit"):
                     dpg.add_menu_item(
+                        label="Reset all inputs", callback=lambda: self.reset_settings()
+                    )
+                    dpg.add_menu_item(
                         label="Preferences",
                         shortcut="(Ctrl+,)",
                     )
@@ -852,7 +856,7 @@ class UI:
                     )
                     dpg.add_menu_item(
                         label="Toggle Fullscreen",
-                        shortcut="(Win+F)",
+                        shortcut="(F11)",
                         callback=lambda _s, _d: dpg.toggle_viewport_fullscreen(),
                     )
                 with dpg.menu(label="Tools"):

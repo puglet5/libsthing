@@ -1,15 +1,13 @@
-import gc
 import logging
 import os
 import re
 import threading
 import time
 import uuid
-from functools import cached_property, partial, wraps
+from functools import partial, wraps
 from itertools import chain
 from multiprocessing import cpu_count
 from pathlib import Path
-from types import NoneType
 from typing import (
     Any,
     Callable,
@@ -18,7 +16,6 @@ from typing import (
     Literal,
     Mapping,
     ParamSpec,
-    Tuple,
     TypeVar,
     assert_never,
 )
@@ -31,16 +28,16 @@ import pyarrow as pa
 from attr import define, field
 from lmfit import Model, Parameters
 from lmfit.model import ModelResult
-from lmfit.models import PseudoVoigtModel, VoigtModel
+from lmfit.models import PseudoVoigtModel
 from natsort import natsorted
 from pathos.multiprocessing import ProcessingPool as Pool
 from pyarrow import csv
 from pybaselines import Baseline
 from scipy.interpolate import UnivariateSpline
 from scipy.ndimage import gaussian_filter1d
-from scipy.signal import find_peaks, savgol_filter
+from scipy.signal import find_peaks
 
-from settings import BaselineRemoval
+from src.settings import BaselineRemoval
 
 PA_READ_OPTIONS = csv.ReadOptions(skip_rows=2, autogenerate_column_names=True)
 PA_PARSE_OPTIONS = csv.ParseOptions(delimiter="\t", quote_char=False)
@@ -125,10 +122,10 @@ def loading_indicator(
     return _wrapper  # type:ignore
 
 
-def flatten(iter: list):
-    if not isinstance(iter[0], Iterable):
-        return iter
-    return list(chain.from_iterable(iter))
+def flatten(l: list):
+    if not isinstance(l[0], Iterable):
+        return l
+    return list(chain.from_iterable(l))
 
 
 def multi_sub(sub_pairs: list[tuple[str, str]], string: str):
@@ -276,19 +273,19 @@ class Spectrum:
                 ),
                 dtype=np.float32,
             )
-        else:
-            x = self.common_x
-            y = np.array(
-                csv.read_csv(
-                    self.file,
-                    read_options=PA_READ_OPTIONS,
-                    parse_options=PA_PARSE_OPTIONS,
-                    convert_options=PA_CONVERT_OPTIONS_SKIP_X,
-                ),
-                dtype=np.float32,
-            )
 
-            return np.c_[x, y]
+        x = self.common_x
+        y = np.array(
+            csv.read_csv(
+                self.file,
+                read_options=PA_READ_OPTIONS,
+                parse_options=PA_PARSE_OPTIONS,
+                convert_options=PA_CONVERT_OPTIONS_SKIP_X,
+            ),
+            dtype=np.float32,
+        )
+
+        return np.c_[x, y]
 
     @property
     def x(self):
@@ -342,10 +339,13 @@ class Spectrum:
         normalization_range: Window = (1, -1),
         baseline_clip=True,
         baseline_removal: BaselineRemoval = BaselineRemoval.SNIP,
-        baseline_params: dict[str, int] = {},
+        baseline_params: dict[str, int] | None = None,
     ):
         if (data := self.raw_spectral_data) is None:
             raise ValueError
+
+        if baseline_params is None:
+            baseline_params = {}
 
         y = data.T[1]
 
@@ -680,7 +680,8 @@ class Spectrum:
             for r in fitted_results:
                 if r is None:
                     raise ValueError(
-                        "Fitting failed in some windows. Possibly too many fit parameters for a given window size"
+                        "Fitting failed in some windows. \
+                            Possibly too many fit parameters for a given window size"
                     )
 
             fitted_y = [r.best_fit for r in fitted_results]
@@ -746,8 +747,8 @@ class Series:
             spectrum = Spectrum.from_data(data.mean(axis=0))
             self._averaged = spectrum
             return spectrum
-        else:
-            return self._averaged
+
+        return self._averaged
 
 
 @define

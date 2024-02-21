@@ -1,8 +1,8 @@
 from enum import StrEnum
-from typing import Any, Callable, Literal, TypedDict
+from typing import Callable, Generator, Literal, TypedDict
 
 import dearpygui.dearpygui as dpg
-from attrs import define, field
+from attrs import define, field, fields
 
 
 class BaselineRemoval(StrEnum):
@@ -33,10 +33,10 @@ class Setting[T]:
         if self.callback is not None:
             self.callback()
 
-    def set(self, value: T):
+    def set(self, value: T, skip_callback=False):
         dpg.set_value(self.tag, value)
         self.value = value
-        if self.callback is not None:
+        if self.callback is not None and not skip_callback:
             self.callback()
 
     @property
@@ -79,3 +79,10 @@ class Settings:
     fitting_y_threshold: Setting[float]
     fitting_y_threshold_type: Setting[Literal["Absolute", "Relative"]]
     fitting_max_iterations: Setting[Literal[-1] | int]
+
+    def __iter__(self) -> Generator[Setting, None, None]:
+        return (getattr(self, field.name) for field in fields(Settings))
+
+    def reset(self):
+        for setting in self:
+            setting.set(setting.default_value, skip_callback=True)

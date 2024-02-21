@@ -31,8 +31,12 @@ typing-extensions = "*"
 pylint = "*"
 matplotlib = "*"
 periodictable = "*"
-bs4 = "*"
+beautifulsoup4 = "*"
 pyarrow-stubs = "*"
+ipywidgets = "*"
+numba = "*"
+iminuit = "*"
+requests = "*"
 
 [requires]
 python_version = "3.12"
