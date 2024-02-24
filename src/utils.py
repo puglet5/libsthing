@@ -16,6 +16,9 @@ from typing import (
     Literal,
     Mapping,
     ParamSpec,
+    Sequence,
+    Sized,
+    TypeAlias,
     TypeVar,
     assert_never,
 )
@@ -30,6 +33,7 @@ from lmfit import Model, Parameters
 from lmfit.model import ModelResult
 from lmfit.models import PseudoVoigtModel
 from natsort import natsorted
+from numba import njit
 from pathos.multiprocessing import ProcessingPool as Pool
 from pyarrow import csv
 from pybaselines import Baseline
@@ -63,14 +67,11 @@ logger = logging.getLogger(__name__)
 
 CPU_COUNT = cpu_count()
 
-T = TypeVar("T")
-P = ParamSpec("P")
-
 Window = tuple[float, float]
 Windows = list[Window]
 
 
-def log_exec_time(f: Callable[P, T]) -> Callable[P, T]:  # type:ignore
+def log_exec_time[T, **P](f: Callable[P, T]) -> Callable[P, T]:
     @wraps(f)
     def _wrapper(*args, **kwargs):
         start_time = time.perf_counter()
@@ -90,9 +91,11 @@ def hide_loading_indicator():
         dpg.hide_item("loading_indicator")
 
 
-def loading_indicator(
-    f: Callable[P, Generator[float | int, Any, Any]], message: str
-) -> Callable[P, Generator[float | int, Any, Any]]:  # type:ignore
+def loading_indicator[
+    _, **P
+](f: Callable[P, Generator[float | int, Any, Any]], message: str) -> Callable[
+    P, Generator[float | int, Any, Any]
+]:
     @wraps(f)
     def _wrapper(*args, **kwargs):
         dpg.configure_item("loading_indicator_message", label=message.center(30))
@@ -138,8 +141,9 @@ def multi_sub(sub_pairs: list[tuple[str, str]], string: str):
     return re.sub(pattern, repl_func, string, flags=re.U)
 
 
-def partition(alist, indices: list):
-    return [alist[i:j] for i, j in zip([0] + indices, indices + [None])]
+def partition(list_, indices: list[int]):
+    indices = [0] + indices + [len(list_)]
+    return [list_[v : indices[k + 1]] for k, v in enumerate(indices[:-1])]
 
 
 def nearest_ciel(arr: np.ndarray, val: float):
@@ -154,6 +158,12 @@ def nearest_floor(arr: np.ndarray, val: float):
 
 def nearest(arr: np.ndarray, val: float):
     return arr.flat[np.abs(arr - val).argmin()]
+
+
+def np_delete_row(arr: np.ndarray, num: int):
+    mask = np.zeros(arr.shape[0], dtype=np.int64) == 0
+    mask[np.where(arr == num)[0]] = False
+    return arr[mask]
 
 
 @define
@@ -528,6 +538,63 @@ class Spectrum:
 
         return self.fit_result
 
+    def _generate_split_ids(
+        self,
+        peak_ids: set[int],
+        peaks: npt.NDArray,
+        threshold: float,
+        threshold_type: Literal["Relative", "Absolute"],
+    ):
+        while True:
+            peak_ids_init = peak_ids.copy()
+            peak_split_ids = sorted(peak_ids)
+            for i, j in zip(peak_split_ids, peak_split_ids[1:]):
+                peak_win_x = peaks[i:j][:, 0]
+                if peak_win_x.size > 1:
+                    x_min, x_max = peak_win_x.min(), peak_win_x.max()
+                    peak_mask = np.logical_and(self.x >= x_min, self.x <= x_max)
+                    win_x, win_y = self.x[peak_mask], self.y[peak_mask]
+
+                    if threshold_type == "Absolute":
+                        mask = win_y <= threshold
+                    else:
+                        mask = win_y / win_y.max() <= threshold
+
+                    for x in win_x[mask]:
+                        split_peak_i = np.searchsorted(peaks[:, 0], [x], side="left")[0]
+                        if peaks[split_peak_i][0] >= x_min:
+                            peak_ids.add(split_peak_i)
+
+            if len(peak_ids) == len(peak_ids_init):
+                break
+
+    def _merge_small_windows(
+        self,
+        windows: npt.NDArray,
+        x_threshold: float,
+    ):
+        for _ in range(100):
+            small_ids = set(
+                [
+                    i
+                    for i, w in enumerate(windows)
+                    if self.x[np.logical_and(self.x >= w[0], self.x <= w[1])].size
+                    <= max(x_threshold, 8)
+                ]
+            )
+            small_ids_init = small_ids.copy()
+
+            for i in small_ids_init:
+                if i in small_ids:
+                    if len(windows) <= i + 1:
+                        continue
+                    windows[i, 1] = windows[i + 1, 1]
+                    windows = np_delete_row(windows, i + 1)
+                    small_ids.remove(i)
+
+            if len(small_ids_init) == len(small_ids):
+                break
+
     def generate_fitting_windows(
         self,
         region: Window,
@@ -550,40 +617,15 @@ class Spectrum:
             np.logical_and(peak_xs >= region_min, peak_xs <= region_max)
         ]
 
-        selected_peak_xs = selected_peaks[:, 0]
-        peak_x_diffs = np.diff(selected_peak_xs)
+        peak_x_diffs = np.diff(selected_peaks[:, 0])
         x_split_ids = [
             np.where(np.isclose(peak_x_diffs, v))[0][0] + 1
             for v in peak_x_diffs[peak_x_diffs >= x_threshold]
         ]
 
-        peak_ids = {0, *x_split_ids, len(selected_peaks)}
+        peak_ids = set([0, *x_split_ids, len(selected_peaks)])
 
-        # subdivide peaks into windows where win_y / win_y.max() <= y_threshold
-        while True:
-            peak_ids_init = peak_ids.copy()
-            peak_split_ids = sorted(peak_ids)
-            for i, j in zip(peak_split_ids, peak_split_ids[1:]):
-                peak_win_x = selected_peaks[i:j][:, 0]
-                if peak_win_x.size > 1:
-                    x_min, x_max = peak_win_x.min(), peak_win_x.max()
-                    peak_mask = np.logical_and(self.x >= x_min, self.x <= x_max)
-                    win_x, win_y = self.x[peak_mask], self.y[peak_mask]
-
-                    if threshold_type == "Absolute":
-                        mask = win_y <= y_threshold
-                    else:
-                        mask = win_y / win_y.max() <= y_threshold
-
-                    for x in win_x[mask]:
-                        split_peak_i = np.searchsorted(
-                            selected_peak_xs, [x], side="left"
-                        )[0]
-                        if selected_peaks[split_peak_i][0] >= x_min:
-                            peak_ids.add(split_peak_i)
-
-            if len(peak_ids) == len(peak_ids_init):
-                break
+        self._generate_split_ids(peak_ids, selected_peaks, y_threshold, threshold_type)
 
         final_split_ids = sorted(peak_ids)[1:-1]
 
@@ -597,47 +639,17 @@ class Spectrum:
             self.fitting_windows = []
             return
 
-        partitioned_ranges = np.array(
+        windows = np.array(
             [[np.min(i[:, 0]), np.max(i[:, 0])] for i in partitioned_peaks]
         )
 
-        windows = self._expand_windows(partitioned_ranges, region)
+        windows = self._expand_windows(windows, region)
 
         if len(windows) == 1:
             self.fitting_windows = windows.tolist()
             return
 
-        # ensure window size >= 8
-        n = 0
-        while n < 100:
-            small_ids = {
-                i
-                for i, w in enumerate(windows)
-                if self.x[np.logical_and(self.x >= w[0], self.x <= w[1])].size
-                <= max(x_threshold, 8)
-            }
-            small_ids_init = small_ids.copy()
-
-            for i in small_ids_init:
-                if i in small_ids:
-                    try:
-                        windows[i, 1] = windows[i + 1, 1]
-                        windows = np.delete(windows, i + 1, axis=0)
-                        small_ids.discard(i)
-                    except IndexError:
-                        try:
-                            if i < len(windows):
-                                windows[i - 1, 1] = windows[i, 1]
-                                windows = np.delete(windows, i, axis=0)
-                                small_ids.discard(i)
-                        except IndexError:
-                            pass
-
-            if len(small_ids_init) == len(small_ids):
-                break
-
-            n += 1
-
+        self._merge_small_windows(windows, x_threshold)
         self.fitting_windows = windows.tolist()
 
     @log_exec_time
