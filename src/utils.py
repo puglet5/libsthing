@@ -606,6 +606,8 @@ class Spectrum:
             if len(small_ids_init) == len(small_ids):
                 break
 
+        return windows
+
     def generate_fitting_windows(
         self,
         region: Window,
@@ -660,7 +662,7 @@ class Spectrum:
             self.fitting_windows = windows.tolist()
             return
 
-        self._merge_small_windows(windows, x_threshold)
+        windows = self._merge_small_windows(windows, x_threshold)
         self.fitting_windows = windows.tolist()
 
     @log_exec_time
