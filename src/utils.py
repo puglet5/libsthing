@@ -33,7 +33,6 @@ from lmfit import Model, Parameters
 from lmfit.model import ModelResult
 from lmfit.models import PseudoVoigtModel
 from natsort import natsorted
-from numba import njit
 from pathos.multiprocessing import ProcessingPool as Pool
 from pyarrow import csv
 from pybaselines import Baseline
@@ -735,6 +734,8 @@ class Series:
     color: list[int] | None = field(init=False, default=None)
     common_x: bool = field(default=True)
     sample_drop_first: int = field(default=0)
+    spectra_total: int = field(init=False)
+    samples_total: int = field(init=False)
     _averaged: Spectrum | None = field(init=False, default=None)
 
     def __attrs_post_init__(self):
@@ -748,6 +749,9 @@ class Series:
 
         if self.name is None:
             self.name = "_".join([self.directory.parent.name, self.directory.name])
+
+        self.spectra_total = np.sum([len(s.spectra) for s in self.samples])
+        self.samples_total = len(self.samples)
 
     @property
     def averaged(self):

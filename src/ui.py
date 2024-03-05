@@ -10,7 +10,7 @@ from attrs import define, field
 from natsort import index_natsorted, order_by_index
 
 from settings import BaselineRemoval, Setting, Settings
-from src.utils import Project, Window
+from src.utils import Project, Series, Window
 
 logger = logging.getLogger(__name__)
 
@@ -333,9 +333,25 @@ class UI:
 
                         dpg.add_text(f"Directory: {series.directory}")
                         dpg.add_text(
-                            f"{len(series.samples)} samples with \
-                                {np.sum([len(s.spectra) for s in series.samples])} spectra total"
+                            f"{series.samples_total} samples with {series.spectra_total} spectra total"
                         )
+
+                        dpg.add_text("")
+                        dpg.add_text("Drop first n spectra in samples:")
+                        dpg.add_slider_int(
+                            min_value=0,
+                            default_value=series.sample_drop_first,
+                            max_value=len(series.samples[0].spectra)-1,
+                            clamped=True,
+                            callback=lambda s, d: self.set_series_drop_first_n(
+                                series, d
+                            ),
+                        )
+
+    def set_series_drop_first_n(self, series: Series, drop_first_n: int):
+        series._averaged = None
+        series.sample_drop_first = drop_first_n
+        self.show_libs_plots()
 
     def bind_item_handlers(self):
         dpg.bind_item_handler_registry(self.window, "window_resize_handler")
@@ -815,12 +831,11 @@ class UI:
     def plot_query_callback(self, sender, data):
         region = list(data[0:2])
         if not region == self.project.selected_region:
-            with dpg.mutex():
-                self.project.selected_region = region
-                if not self.settings.selection_guides_shown.value:
-                    self.settings.selection_guides_shown.set(True)
+            self.project.selected_region = region
+            if not self.settings.selection_guides_shown.value:
+                self.settings.selection_guides_shown.set(True)
 
-                self.refresh_selection_guides()
+            self.refresh_selection_guides()
 
     def setup_layout(self):
         with dpg.window(
