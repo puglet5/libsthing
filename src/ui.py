@@ -10,13 +10,9 @@ from attrs import define, field
 from natsort import index_natsorted, order_by_index
 
 from settings import BaselineRemoval, Setting, Settings
-from src.utils import Project, Series, Window
+from src.utils import LABEL_PAD, TOOLTIP_DELAY_SEC, Project, Series, Window
 
 logger = logging.getLogger(__name__)
-
-
-TOOLTIP_DELAY_SEC = 0.1
-LABEL_PAD = 23
 
 
 @define

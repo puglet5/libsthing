@@ -69,6 +69,8 @@ CPU_COUNT = cpu_count()
 Window = tuple[float, float]
 Windows = list[Window]
 
+TOOLTIP_DELAY_SEC = 0.1
+LABEL_PAD = 23
 
 def log_exec_time[T, **P](f: Callable[P, T]) -> Callable[P, T]:
     @wraps(f)
@@ -92,20 +94,27 @@ def hide_loading_indicator():
 
 def loading_indicator[
     T, **P
-](f: Callable[P, Generator[float | int, Any, T]], message: str) -> Callable[P, T]:
+](f: Callable[P, Generator[float | int | str, Any, T]], message: str) -> Callable[P, T]:
     @wraps(f)
     def _wrapper(*args, **kwargs):
         dpg.configure_item("loading_indicator_message", label=message.center(30))
         threading.Timer(0.1, show_loading_indicator).start()
         progress_generator = f(*args, **kwargs)
+        progress = 0
 
         try:
             while True:
                 progress = next(progress_generator)
-                dpg.configure_item(
-                    "loading_indicator_message",
-                    label=f"{message}: {progress:.0f}%".center(30),
-                )
+                if progress == "aborted":
+                    dpg.configure_item(
+                        "loading_indicator_message",
+                        label=f"{message}: aborted!".center(30),
+                    )
+                else:
+                    dpg.configure_item(
+                        "loading_indicator_message",
+                        label=f"{message}: {progress:.0f}%".center(30),
+                    )
         except StopIteration as result:
             return result.value
         except TypeError:
@@ -113,10 +122,17 @@ def loading_indicator[
         except Exception as e:
             raise ValueError from e
         finally:
-            dpg.configure_item(
-                "loading_indicator_message",
-                label=f"{message}: 100%".center(30),
-            )
+            if progress == "aborted":
+                dpg.configure_item(
+                    "loading_indicator_message",
+                    label=f"{message}: aborted!".center(30),
+                )
+            else:
+                dpg.configure_item(
+                    "loading_indicator_message",
+                    label=f"{message}: 100%".center(30),
+                )
+
             threading.Timer(0.5, hide_loading_indicator).start()
 
     return _wrapper  # type:ignore
@@ -584,7 +600,7 @@ class Spectrum:
                     if len(windows) <= i + 1:
                         continue
                     windows[i, 1] = windows[i + 1, 1]
-                    windows = np_delete_row(windows, i + 1)
+                    windows = np.delete(windows, i + 1, axis=0)
                     small_ids.remove(i)
 
             if len(small_ids_init) == len(small_ids):
@@ -663,6 +679,9 @@ class Spectrum:
                     time.sleep(LOADING_INDICATOR_FETCH_DELAY_S)
 
                     if dpg.is_key_down(dpg.mvKey_Escape):
+                        yield "aborted"
+                        pool.terminate()
+                        pool.join()
                         return None
 
                 fit_results: list[ModelResult | None] = result.get()
@@ -833,8 +852,6 @@ class Fit:
         self.r_squared_mean = np.mean(r_squared)
         self.r_squared_min = np.min(r_squared)
         self.r_squared_st_dev = np.std(r_squared)
-        
-        print(self.r_squared_mean)
 
     @classmethod
     def from_fit_results(
@@ -853,6 +870,7 @@ class Fit:
         y = np.concatenate(
             [r.best_fit for r in fit_results]  # type:ignore
         )
+
         data = Spectrum.from_data(np.array([x, y]).T)
 
         return cls(data=data, fit_results=fit_results, windows=windows) # type:ignore
