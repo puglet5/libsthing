@@ -10,7 +10,7 @@ from attrs import define, field
 from natsort import index_natsorted, order_by_index
 
 from settings import BaselineRemoval, Setting, Settings
-from src.utils import LABEL_PAD, TOOLTIP_DELAY_SEC, Project, Series, Window
+from src.utils import LABEL_PAD, SIDEBAR_WIDTH, TOOLTIP_DELAY_SEC, WINDOW_TAG, Project, Series, Window
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +19,6 @@ logger = logging.getLogger(__name__)
 class UI:
     project: Project = field(init=False)
     settings: Settings = field(init=False)
-    window: Literal["primary"] = field(init=False, default="primary")
-    sidebar_width: Literal[350] = 350
     global_theme: int = field(init=False, default=0)
     button_theme: int = field(init=False, default=0)
     thumbnail_plot_theme: int = field(init=False, default=0)
@@ -43,8 +41,8 @@ class UI:
     def start(self, dev=False, debug=False):
         dpg.setup_dearpygui()
         dpg.show_viewport()
-        dpg.set_viewport_vsync(True)
-        dpg.set_primary_window(self.window, True)
+        dpg.set_viewport_vsync(False)
+        dpg.set_primary_window(WINDOW_TAG, True)
         try:
             if dev:
                 dpg.set_frame_callback(1, self.setup_dev)
@@ -350,7 +348,7 @@ class UI:
         self.show_libs_plots()
 
     def bind_item_handlers(self):
-        dpg.bind_item_handler_registry(self.window, "window_resize_handler")
+        dpg.bind_item_handler_registry(WINDOW_TAG, "window_resize_handler")
 
     def clear_plots(self):
         dpg.delete_item("libs_y_axis", children_only=True)
@@ -825,18 +823,19 @@ class UI:
         self.refresh_all()
 
     def plot_query_callback(self, sender, data):
-        region = list(data[0:2])
-        if not region == self.project.selected_region:
-            self.project.selected_region = region
-            if not self.settings.selection_guides_shown.value:
-                self.settings.selection_guides_shown.set(True)
+        with dpg.mutex():
+            region = list(data[0:2])
+            if not region == self.project.selected_region:
+                self.project.selected_region = region
+                if not self.settings.selection_guides_shown.value:
+                    self.settings.selection_guides_shown.set(True)
 
-            self.refresh_selection_guides()
+                self.refresh_selection_guides()
 
     def setup_layout(self):
         with dpg.window(
             label="libsthing",
-            tag=self.window,
+            tag=WINDOW_TAG,
             horizontal_scrollbar=False,
             no_scrollbar=True,
             min_size=[160, 90],
@@ -904,7 +903,7 @@ class UI:
 
             with dpg.group(horizontal=True):
                 with dpg.child_window(
-                    border=False, width=self.sidebar_width, tag="sidebar"
+                    border=False, width=SIDEBAR_WIDTH, tag="sidebar"
                 ):
                     with dpg.collapsing_header(label="Project", default_open=True):
                         with dpg.child_window(

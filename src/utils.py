@@ -71,6 +71,8 @@ Windows = list[Window]
 
 TOOLTIP_DELAY_SEC = 0.1
 LABEL_PAD = 23
+WINDOW_TAG = "primary"
+SIDEBAR_WIDTH = 350
 
 def log_exec_time[T, **P](f: Callable[P, T]) -> Callable[P, T]:
     @wraps(f)
