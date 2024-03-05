@@ -610,11 +610,11 @@ class UI:
             spectrum.fitting_windows = [region]
 
         max_iterations = self.settings.fitting_max_iterations.value
-        spectrum.fit_windows_parallel(
+        fitted = spectrum.fit_windows_parallel(
             spectrum.fitting_windows, max_iterations=max_iterations
         )
-        if isinstance(spectrum.fitted, np.ndarray):
-            x, y = spectrum.fitted.T.tolist()
+        if fitted is not None:
+            x, y = fitted.data.xy
             dpg.add_line_series(
                 x,
                 y,

@@ -91,10 +91,8 @@ def hide_loading_indicator():
 
 
 def loading_indicator[
-    _, **P
-](f: Callable[P, Generator[float | int, Any, Any]], message: str) -> Callable[
-    P, Generator[float | int, Any, Any]
-]:
+    T, **P
+](f: Callable[P, Generator[float | int, Any, T]], message: str) -> Callable[P, T]:
     @wraps(f)
     def _wrapper(*args, **kwargs):
         dpg.configure_item("loading_indicator_message", label=message.center(30))
@@ -249,10 +247,8 @@ class Spectrum:
         default=None, init=False, repr=False
     )
     common_x: npt.NDArray | None = field(default=None, repr=False)
-    fit_result: ModelResult | None = field(init=False, default=None)
     peaks: npt.NDArray | None = field(init=False, default=None)
     fitting_windows: Windows = field(init=False, factory=list)
-    fitted: npt.NDArray | None = field(init=False, default=None)
 
     def __attrs_post_init__(self):
         if self.raw_spectral_data is None and self.file is not None:
@@ -485,7 +481,10 @@ class Spectrum:
         return windows
 
     def fit_window(self, window: Window, max_iterations: int | None = None):
-        assert isinstance(self.peaks, np.ndarray)
+        if not isinstance(self.peaks, np.ndarray):
+            self.find_peaks(window)
+        if not isinstance(self.peaks, np.ndarray):
+            raise ValueError("No peaks found in selected region")
 
         if max_iterations == -1:
             max_iterations = None
@@ -530,12 +529,9 @@ class Spectrum:
             result = model.fit(win_y, params=params, x=win_x, max_nfev=max_iterations)
         except TypeError as e:
             logger.error(f"Wrong fit parameters: {e}")
-            self.fit_result = None
-            return self.fit_result
+            return None
 
-        self.fit_result = result
-
-        return self.fit_result
+        return result
 
     def _generate_split_ids(
         self,
@@ -653,7 +649,7 @@ class Spectrum:
 
     @log_exec_time
     @partial(loading_indicator, message="Fitting series")
-    def fit_windows_parallel(self, windows: Windows, max_iterations):
+    def fit_windows_parallel(self, windows: Windows, max_iterations: int):
         if len(windows) == 0:
             return
 
@@ -667,41 +663,34 @@ class Spectrum:
                     time.sleep(LOADING_INDICATOR_FETCH_DELAY_S)
 
                     if dpg.is_key_down(dpg.mvKey_Escape):
-                        return
+                        return None
 
-                fitted_results = result.get()
+                fit_results: list[ModelResult | None] = result.get()
             except Exception as e:
                 logger.error(f"Error while fitting: {e}")
                 pool.terminate()
                 pool.join()
 
-                return
+                return None
 
             finally:
                 pool.close()
                 pool.join()
 
-        x = self.x[
-            np.logical_and(
-                self.x >= windows[0][0] - 0.5 * self.step, self.x <= windows[-1][1]
-            )
-        ]
-
         try:
-            for r in fitted_results:
-                if r is None:
+            for r in fit_results:
+                if not isinstance(r, ModelResult):
                     raise ValueError(
                         "Fitting failed in some windows. \
                             Possibly too many fit parameters for a given window size"
                     )
-
-            fitted_y = [r.best_fit for r in fitted_results]
-            y = np.concatenate(fitted_y)
         except ValueError as e:
             logger.error(f"Fitting result error: {e}")
-            return
+            return None
 
-        self.fitted = np.array([x, y]).T
+        assert isinstance(fit_results, list)
+
+        return Fit.from_fit_results(self, windows, fit_results)
 
 
 @define
@@ -827,3 +816,43 @@ class Project:
             finally:
                 pool.close()
                 pool.join()
+
+
+@define
+class Fit:
+    data: Spectrum
+    r_squared_mean: np.float_ = field(init=False)
+    r_squared_min: np.float_ = field(init=False)
+    r_squared_st_dev: np.float_ = field(init=False)
+    windows: Windows
+    windows_total: int = field(init=False)
+    fit_results: list[ModelResult]
+
+    def __attrs_post_init__(self):
+        r_squared = np.array([r.rsquared for r in self.fit_results])
+        self.r_squared_mean = np.mean(r_squared)
+        self.r_squared_min = np.min(r_squared)
+        self.r_squared_st_dev = np.std(r_squared)
+        
+        print(self.r_squared_mean)
+
+    @classmethod
+    def from_fit_results(
+        cls, parent_spectrum: Spectrum, windows, fit_results: list[ModelResult | None]
+    ):
+        for r in fit_results:
+            if r is None:
+                raise ValueError
+
+        x = parent_spectrum.x[
+            np.logical_and(
+                parent_spectrum.x >= windows[0][0] - 0.5 * parent_spectrum.step,
+                parent_spectrum.x <= windows[-1][1],
+            )
+        ]
+        y = np.concatenate(
+            [r.best_fit for r in fit_results]  # type:ignore
+        )
+        data = Spectrum.from_data(np.array([x, y]).T)
+
+        return cls(data=data, fit_results=fit_results, windows=windows) # type:ignore
