@@ -74,6 +74,7 @@ LABEL_PAD = 23
 WINDOW_TAG = "primary"
 SIDEBAR_WIDTH = 350
 
+
 def log_exec_time[T, **P](f: Callable[P, T]) -> Callable[P, T]:
     @wraps(f)
     def _wrapper(*args, **kwargs):
@@ -877,4 +878,4 @@ class Fit:
 
         data = Spectrum.from_data(np.array([x, y]).T)
 
-        return cls(data=data, fit_results=fit_results, windows=windows) # type:ignore
+        return cls(data=data, fit_results=fit_results, windows=windows)  # type:ignore
