@@ -10,7 +10,16 @@ from attrs import define, field
 from natsort import index_natsorted, order_by_index
 
 from settings import BaselineRemoval, Setting, Settings
-from src.utils import LABEL_PAD, SIDEBAR_WIDTH, TOOLTIP_DELAY_SEC, WINDOW_TAG, Project, Series, Window
+from src.utils import (
+    LABEL_PAD,
+    SIDEBAR_WIDTH,
+    TOOLTIP_DELAY_SEC,
+    WINDOW_TAG,
+    Project,
+    Series,
+    Window,
+)
+from ui.periodic_table import PeriodicTable
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +28,7 @@ logger = logging.getLogger(__name__)
 class UI:
     project: Project = field(init=False)
     settings: Settings = field(init=False)
+    periodic_table: PeriodicTable = field(init=False)
     global_theme: int = field(init=False, default=0)
     button_theme: int = field(init=False, default=0)
     thumbnail_plot_theme: int = field(init=False, default=0)
@@ -37,6 +47,7 @@ class UI:
         self.setup_handler_registries()
         self.setup_layout()
         self.bind_item_handlers()
+        self.periodic_table = PeriodicTable()
 
     def start(self, dev=False, debug=False):
         dpg.setup_dearpygui()
@@ -197,6 +208,13 @@ class UI:
                 dpg.add_theme_style(
                     dpg.mvPlotStyleVar_LineWeight, 2, category=dpg.mvThemeCat_Plots
                 )
+            with dpg.theme_component(dpg.mvAll):
+                dpg.add_theme_style(
+                    dpg.mvStyleVar_SelectableTextAlign,
+                    0.5,
+                    category=dpg.mvThemeCat_Core,
+                )
+
         with dpg.theme() as self.button_theme:
             with dpg.theme_component(dpg.mvButton):
                 dpg.add_theme_color(
@@ -261,6 +279,8 @@ class UI:
         dpg.configure_item("libs_plots", pan_button=dpg.mvMouseButton_Middle)
         if dpg.is_key_pressed(dpg.mvKey_Q):
             self.stop()
+        if dpg.is_key_pressed(dpg.mvKey_P):
+            self.periodic_table.toggle()
 
     def series_left_click(self):
         series_rows = dpg.get_item_children("series_list_wrapper", slot=1)
@@ -335,7 +355,7 @@ class UI:
                         dpg.add_slider_int(
                             min_value=0,
                             default_value=series.sample_drop_first,
-                            max_value=len(series.samples[0].spectra)-1,
+                            max_value=len(series.samples[0].spectra) - 1,
                             clamped=True,
                             callback=lambda s, d: self.set_series_drop_first_n(
                                 series, d
@@ -902,9 +922,7 @@ class UI:
                         )
 
             with dpg.group(horizontal=True):
-                with dpg.child_window(
-                    border=False, width=SIDEBAR_WIDTH, tag="sidebar"
-                ):
+                with dpg.child_window(border=False, width=SIDEBAR_WIDTH, tag="sidebar"):
                     with dpg.collapsing_header(label="Project", default_open=True):
                         with dpg.child_window(
                             width=-1,

@@ -18,6 +18,24 @@
                     "PYTHONPATH": "."
                 }
             }
+        },
+        {
+            "label": "run misc",
+            "type": "process",
+            "command": "${command:python.interpreterPath}",
+            "args": [
+                "${workspaceFolder}/src/sandbox/test.py"
+            ],
+            "problemMatcher": [],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "options": {
+                "env": {
+                    "PYTHONPATH": "."
+                }
+            }
         }
     ]
 }
