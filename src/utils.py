@@ -743,7 +743,7 @@ class Series:
     name: str | None = field(default=None)
     samples: list[Sample] = field(init=False, factory=list)
     id: str = field(init=False, default=0)
-    selected: bool = field(init=False, default=True)
+    selected: bool = field(init=False, default=False)
     color: list[int] | None = field(init=False, default=None)
     common_x: bool = field(default=True)
     sample_drop_first: int = field(default=0)

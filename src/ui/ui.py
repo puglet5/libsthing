@@ -19,6 +19,7 @@ from src.utils import (
     Series,
     Window,
 )
+from ui.peak_table import PeakTable
 from ui.periodic_table import PeriodicTable
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ class UI:
     project: Project = field(init=False)
     settings: Settings = field(init=False)
     periodic_table: PeriodicTable = field(init=False)
+    peak_table: PeakTable = field(init=False)
     global_theme: int = field(init=False, default=0)
     button_theme: int = field(init=False, default=0)
     thumbnail_plot_theme: int = field(init=False, default=0)
@@ -48,6 +50,7 @@ class UI:
         self.setup_layout()
         self.bind_item_handlers()
         self.periodic_table = PeriodicTable()
+        self.peak_table = PeakTable()
 
     def start(self, dev=False, debug=False):
         dpg.setup_dearpygui()
@@ -208,12 +211,12 @@ class UI:
                 dpg.add_theme_style(
                     dpg.mvPlotStyleVar_LineWeight, 2, category=dpg.mvThemeCat_Plots
                 )
-            with dpg.theme_component(dpg.mvAll):
-                dpg.add_theme_style(
-                    dpg.mvStyleVar_SelectableTextAlign,
-                    0.5,
-                    category=dpg.mvThemeCat_Core,
-                )
+            # with dpg.theme_component(dpg.mvAll):
+            #     dpg.add_theme_style(
+            #         dpg.mvStyleVar_SelectableTextAlign,
+            #         0.5,
+            #         category=dpg.mvThemeCat_Core,
+            #     )
 
         with dpg.theme() as self.button_theme:
             with dpg.theme_component(dpg.mvButton):
@@ -283,6 +286,9 @@ class UI:
             self.periodic_table.toggle()
 
     def series_left_click(self):
+        if not dpg.is_item_clicked("series_list_wrapper"):
+            return
+
         series_rows = dpg.get_item_children("series_list_wrapper", slot=1)
         if series_rows is None:
             return
@@ -292,26 +298,44 @@ class UI:
             if series_groups is None:
                 return
 
+            active_groups = 0
+            for group in series_groups:
+                if dpg.is_item_active(group):
+                    active_groups += 1
+
+            if active_groups != 1:
+                return
+
             for group in series_groups:
                 sid = dpg.get_item_user_data(group)
                 if sid is None:
                     return
 
-                if dpg.is_item_active(group):
-                    series = self.project.series[sid]
-                    group_children = dpg.get_item_children(group, slot=1)
-                    if group_children is None:
-                        return
+                series = self.project.series[sid]
+                group_children = dpg.get_item_children(group, slot=1)
+                if group_children is None:
+                    return
+                thumbnail = group_children[0]
 
-                    thumbnail = group_children[0]
-                    if not series.selected:
+                if dpg.is_key_down(dpg.mvKey_Shift):
+                    if dpg.is_item_active(group):
+                        if not series.selected:
+                            dpg.bind_item_theme(
+                                thumbnail, self.active_thumbnail_plot_theme
+                            )
+                            series.selected = True
+                        else:
+                            dpg.bind_item_theme(thumbnail, self.thumbnail_plot_theme)
+                            series.selected = False
+                else:
+                    if dpg.is_item_active(group):
                         dpg.bind_item_theme(thumbnail, self.active_thumbnail_plot_theme)
                         series.selected = True
                     else:
                         dpg.bind_item_theme(thumbnail, self.thumbnail_plot_theme)
                         series.selected = False
 
-                    self.show_libs_plots()
+        self.show_libs_plots()
 
     def series_right_click(self):
         series_rows = dpg.get_item_children("series_list_wrapper", slot=1)
@@ -363,9 +387,10 @@ class UI:
                         )
 
     def set_series_drop_first_n(self, series: Series, drop_first_n: int):
-        series._averaged = None
-        series.sample_drop_first = drop_first_n
-        self.show_libs_plots()
+        with dpg.mutex():
+            series._averaged = None
+            series.sample_drop_first = drop_first_n
+            self.show_libs_plots()
 
     def bind_item_handlers(self):
         dpg.bind_item_handler_registry(WINDOW_TAG, "window_resize_handler")
@@ -395,6 +420,23 @@ class UI:
         except ValueError:
             dpg.show_item("project_directory_error_message")
             return
+
+        with dpg.mutex():
+            for i, (sid, series) in enumerate(self.project.series.items()):
+                if series.color is None:
+                    series.color = (
+                        (
+                            np.array(
+                                dpg.sample_colormap(
+                                    dpg.mvPlotColormap_Spectral,
+                                    i / (len(self.project.series)),
+                                )
+                            )
+                            * [255, 255, 255, 255]
+                        )
+                        .astype(int)
+                        .tolist()
+                    )
 
         self.show_libs_plots()
         self.populate_series_list(initial=True)
@@ -439,6 +481,7 @@ class UI:
             for i, series in enumerate(self.project.selected_series):
                 spectrum = series.averaged
                 assert spectrum.raw_spectral_data is not None
+                assert series.color
                 spectrum.process_spectral_data(
                     normalized,
                     normalization_range=normalization_range,
@@ -450,21 +493,6 @@ class UI:
                     },
                 )
                 x, y = spectrum.xy.tolist()
-
-                if series.color is None:
-                    series.color = (
-                        (
-                            np.array(
-                                dpg.sample_colormap(
-                                    dpg.mvPlotColormap_Spectral,
-                                    i / (len(self.project.series)),
-                                )
-                            )
-                            * [255, 255, 255, 255]
-                        )
-                        .astype(int)
-                        .tolist()
-                    )
 
                 with dpg.theme() as plot_theme:
                     with dpg.theme_component(dpg.mvLineSeries):
@@ -528,7 +556,8 @@ class UI:
 
         for i, (s_id, series) in enumerate(self.project.series.items()):
             if initial:
-                series.selected = True
+                if i == 0:
+                    series.selected = True
             with dpg.group(
                 horizontal=False,
                 parent=f"series_row_{i//self.series_list_n_columns}",
@@ -744,6 +773,9 @@ class UI:
             self.settings.peaks_shown.set(False)
             self.settings.peaks_shown.set(True)
 
+        if self.peak_table.is_shown:
+            self.refresh_peak_table()
+
     def change_fitting_windows_threshold_type(self):
         threshold_type = self.settings.fitting_y_threshold_type.value
         if threshold_type == "Absolute":
@@ -759,11 +791,17 @@ class UI:
         with dpg.mutex():
             self.refresh_peaks()
             self.refresh_fitting_windows()
+            self.refresh_peak_table()
 
     def refresh_selection_guides(self):
         if self.settings.selection_guides_shown.value:
             self.settings.selection_guides_shown.set(False)
             self.settings.selection_guides_shown.set(True)
+
+    def refresh_peak_table(self):
+        if not self.project.selected_series:
+            return
+        self.peak_table.peaks = self.project.selected_series[0].averaged.peaks
 
     def handle_region_guide(self, guide, start_or_end: Literal[0, 1]):
         start_value = dpg.get_value("region_guide_start")
@@ -1144,6 +1182,11 @@ class UI:
                                     "Show peaks".rjust(LABEL_PAD),
                                 )
                                 dpg.add_checkbox(**self.settings.peaks_shown.as_dict)
+                                dpg.add_button(
+                                    label="Peak table",
+                                    width=-1,
+                                    callback=lambda s, d: self.peak_table.show(),
+                                )
                             with dpg.group(horizontal=True):
                                 dpg.add_text(
                                     "X Window threshold".rjust(LABEL_PAD),

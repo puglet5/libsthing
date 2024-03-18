@@ -9,7 +9,7 @@ class BaselineRemoval(StrEnum):
     SNIP = "SNIP"
     NONE = "None"
     POLY = "Polynomial"
-    AMM = "Apaptive minmax"
+    AMM = "Adaptive minmax"
 
 
 class DPGWidgetArgs[T](TypedDict):
