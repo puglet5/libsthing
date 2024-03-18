@@ -63,7 +63,7 @@ class PeakTable:
 
     def populate_table(self):
         dpg.delete_item("peak_table", children_only=True, slot=1)
-        if self.peaks is None:
+        if self.peaks is None or (len(self.peaks) == 0):
             return
 
         max_peak_y = np.max(self.peaks[:, 1])

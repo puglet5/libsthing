@@ -41,7 +41,12 @@ class UI:
         self.setup_settings()
 
         dpg.create_context()
-        dpg.create_viewport(title="hsistat", width=1920, height=1080, vsync=True)
+
+        with dpg.font_registry():
+            with dpg.font(Path("./src/fonts/cozette.ttf").absolute().as_posix(), 13):
+                dpg.add_font_range(0x0370, 0x03FF)
+
+        dpg.create_viewport(title="libsthing", width=1920, height=1080, vsync=True)
         dpg.configure_app(wait_for_input=False)
 
         self.setup_themes()
@@ -763,6 +768,8 @@ class UI:
                             tag=f"{s.id}_peak_{i}",
                         )
 
+        self.refresh_peak_table()
+
     def refresh_fitting_windows(self):
         if self.settings.fitting_windows_shown.value:
             self.settings.fitting_windows_shown.set(False)
@@ -773,8 +780,7 @@ class UI:
             self.settings.peaks_shown.set(False)
             self.settings.peaks_shown.set(True)
 
-        if self.peak_table.is_shown:
-            self.refresh_peak_table()
+        self.refresh_peak_table()
 
     def change_fitting_windows_threshold_type(self):
         threshold_type = self.settings.fitting_y_threshold_type.value
@@ -791,7 +797,6 @@ class UI:
         with dpg.mutex():
             self.refresh_peaks()
             self.refresh_fitting_windows()
-            self.refresh_peak_table()
 
     def refresh_selection_guides(self):
         if self.settings.selection_guides_shown.value:
