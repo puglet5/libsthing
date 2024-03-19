@@ -21,6 +21,8 @@ from src.utils import (
 )
 from ui.peak_table import PeakTable
 from ui.periodic_table import PeriodicTable
+from ui.settings_window import SettingsWindow
+from ui.simulation_window import SimulationWindow
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,8 @@ class UI:
     project: Project = field(init=False)
     settings: Settings = field(init=False)
     periodic_table: PeriodicTable = field(init=False)
+    simulation_window: SimulationWindow = field(init=False)
+    settings_window: SettingsWindow = field(init=False)
     peak_table: PeakTable = field(init=False)
     global_theme: int = field(init=False, default=0)
     button_theme: int = field(init=False, default=0)
@@ -52,10 +56,14 @@ class UI:
         self.setup_themes()
         self.bind_themes()
         self.setup_handler_registries()
+
+        self.periodic_table = PeriodicTable()
+        self.simulation_window = SimulationWindow()
+        self.peak_table = PeakTable()
+        self.settings_window = SettingsWindow()
+
         self.setup_layout()
         self.bind_item_handlers()
-        self.periodic_table = PeriodicTable()
-        self.peak_table = PeakTable()
 
     def start(self, dev=False, debug=False):
         dpg.setup_dearpygui()
@@ -195,8 +203,8 @@ class UI:
         self.refresh_all()
 
     def stop(self):
-        dpg.stop_dearpygui()
         dpg.destroy_context()
+        dpg.stop_dearpygui()
 
     def setup_dev(self):
         dpg.set_value(
@@ -289,6 +297,8 @@ class UI:
             self.stop()
         if dpg.is_key_pressed(dpg.mvKey_P):
             self.periodic_table.toggle()
+        if dpg.is_key_pressed(dpg.mvKey_Comma):
+            self.settings_window.toggle()
 
     def series_left_click(self):
         if not dpg.is_item_clicked("series_list_wrapper"):
@@ -298,6 +308,8 @@ class UI:
         if series_rows is None:
             return
 
+        # plot thumbnail clicked = active
+        # verify that only one is clicked
         active_groups = 0
         for row in series_rows:
             series_groups = dpg.get_item_children(row, slot=1)
@@ -913,7 +925,9 @@ class UI:
                     dpg.add_menu_item(label="Open new project", shortcut="(Ctrl+O)")
                     dpg.add_menu_item(label="Save", shortcut="(Ctrl+S)")
                     dpg.add_menu_item(label="Save As", shortcut="(Ctrl+Shift+S)")
-                    dpg.add_menu_item(label="Quit", shortcut="(Ctrl+Q)")
+                    dpg.add_menu_item(
+                        label="Quit", shortcut="(Ctrl+Q)", callback=self.stop
+                    )
 
                 with dpg.menu(label="Edit"):
                     dpg.add_menu_item(
@@ -922,6 +936,7 @@ class UI:
                     dpg.add_menu_item(
                         label="Preferences",
                         shortcut="(Ctrl+,)",
+                        callback=self.settings_window.show,
                     )
 
                 with dpg.menu(label="Window"):
@@ -968,6 +983,16 @@ class UI:
                             label="Show Item Registry",
                             callback=lambda: dpg.show_tool(dpg.mvTool_ItemRegistry),
                         )
+                    dpg.add_menu_item(
+                        label="Periodic table",
+                        shortcut="(Ctrl+P)",
+                        callback=self.periodic_table.show,
+                    )
+
+                    dpg.add_menu_item(
+                        label="Browse NIST data",
+                        callback=self.simulation_window.show,
+                    )
 
             with dpg.group(horizontal=True):
                 with dpg.child_window(border=False, width=SIDEBAR_WIDTH, tag="sidebar"):

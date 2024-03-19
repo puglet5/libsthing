@@ -1,4 +1,4 @@
-from src.ui.ui import UI
+from ui.primary import UI
 
 if __name__ == "__main__":
     ui = UI()
