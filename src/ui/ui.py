@@ -298,28 +298,33 @@ class UI:
         if series_rows is None:
             return
 
+        active_groups = 0
         for row in series_rows:
             series_groups = dpg.get_item_children(row, slot=1)
             if series_groups is None:
-                return
+                continue
 
-            active_groups = 0
             for group in series_groups:
                 if dpg.is_item_active(group):
                     active_groups += 1
 
-            if active_groups != 1:
-                return
+        if active_groups != 1:
+            return
+
+        for row in series_rows:
+            series_groups = dpg.get_item_children(row, slot=1)
+            if series_groups is None:
+                continue
 
             for group in series_groups:
                 sid = dpg.get_item_user_data(group)
                 if sid is None:
-                    return
+                    continue
 
                 series = self.project.series[sid]
                 group_children = dpg.get_item_children(group, slot=1)
                 if group_children is None:
-                    return
+                    continue
                 thumbnail = group_children[0]
 
                 if dpg.is_key_down(dpg.mvKey_Shift):
@@ -969,7 +974,7 @@ class UI:
                     with dpg.collapsing_header(label="Project", default_open=True):
                         with dpg.child_window(
                             width=-1,
-                            height=200,
+                            height=100,
                             no_scrollbar=True,
                         ):
                             with dpg.group(horizontal=True):
