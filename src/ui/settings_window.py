@@ -12,17 +12,27 @@ class SettingsWindow:
     def __attrs_post_init__(self):
         with dpg.window(
             label=f"Settings",
-            show=False,
-            no_resize=True,
-            max_size=(800, 600),
             tag="settings_window",
+            show=False,
+            no_move=True,
+            no_collapse=True,
+            modal=True,
+            width=700,
+            height=400,
+            no_resize=True,
         ):
             ...
+
+        w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
+
+        dpg.configure_item("settings_window", pos=[w // 2 - 350, h // 2 - 200])
 
     def is_shown(self):
         return dpg.is_item_shown("settings_window")
 
     def show(self):
+        w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
+        dpg.configure_item("settings_window", pos=[w // 2 - 350, h // 2 - 200])
         dpg.show_item("settings_window")
 
     def hide(self):

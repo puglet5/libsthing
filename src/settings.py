@@ -4,6 +4,8 @@ from typing import Callable, Generator, Literal, TypedDict
 import dearpygui.dearpygui as dpg
 from attrs import define, field, fields
 
+from utils import DPGItem
+
 
 class BaselineRemoval(StrEnum):
     SNIP = "SNIP"
@@ -13,14 +15,14 @@ class BaselineRemoval(StrEnum):
 
 
 class DPGWidgetArgs[T](TypedDict):
-    tag: int | str
+    tag: DPGItem
     default_value: T
     callback: Callable
 
 
 @define
 class Setting[T]:
-    tag: str | int
+    tag: DPGItem
     default_value: T = field()
     value: T = field(init=False)
     callback: Callable | None

@@ -15,10 +15,12 @@ from src.utils import (
     SIDEBAR_WIDTH,
     TOOLTIP_DELAY_SEC,
     WINDOW_TAG,
+    DPGItem,
     Project,
     Series,
     Window,
 )
+from ui.loading_indicator import LoadingIndicator
 from ui.peak_table import PeakTable
 from ui.periodic_table import PeriodicTable
 from ui.settings_window import SettingsWindow
@@ -35,8 +37,8 @@ class UI:
     simulation_window: SimulationWindow = field(init=False)
     settings_window: SettingsWindow = field(init=False)
     peak_table: PeakTable = field(init=False)
+    loading_indicator: LoadingIndicator = field(init=False)
     global_theme: int = field(init=False, default=0)
-    button_theme: int = field(init=False, default=0)
     thumbnail_plot_theme: int = field(init=False, default=0)
     active_thumbnail_plot_theme: int = field(init=False, default=0)
     series_list_n_columns: int = field(init=False, default=5)
@@ -61,6 +63,7 @@ class UI:
         self.simulation_window = SimulationWindow()
         self.peak_table = PeakTable()
         self.settings_window = SettingsWindow()
+        self.loading_indicator = LoadingIndicator()
 
         self.setup_layout()
         self.bind_item_handlers()
@@ -223,30 +226,6 @@ class UI:
             with dpg.theme_component(dpg.mvLineSeries):
                 dpg.add_theme_style(
                     dpg.mvPlotStyleVar_LineWeight, 2, category=dpg.mvThemeCat_Plots
-                )
-            # with dpg.theme_component(dpg.mvAll):
-            #     dpg.add_theme_style(
-            #         dpg.mvStyleVar_SelectableTextAlign,
-            #         0.5,
-            #         category=dpg.mvThemeCat_Core,
-            #     )
-
-        with dpg.theme() as self.button_theme:
-            with dpg.theme_component(dpg.mvButton):
-                dpg.add_theme_color(
-                    dpg.mvThemeCol_Button,
-                    (37, 37, 38, -255),
-                    category=dpg.mvThemeCat_Core,
-                )
-                dpg.add_theme_color(
-                    dpg.mvThemeCol_ButtonActive,
-                    (37, 37, 38, -255),
-                    category=dpg.mvThemeCat_Core,
-                )
-                dpg.add_theme_color(
-                    dpg.mvThemeCol_ButtonHovered,
-                    (37, 37, 38, -255),
-                    category=dpg.mvThemeCat_Core,
                 )
 
         with dpg.theme() as self.thumbnail_plot_theme:
@@ -472,11 +451,11 @@ class UI:
             height=series_window_height,
         )
 
-    def directory_picker_callback(self, _sender, data):
+    def directory_picker_callback(self, _sender: DPGItem, data):
         dpg.set_value("project_directory", data["file_path_name"])
         self.setup_project()
 
-    def set_series_color(self, sender: int | str, color: list[int]):
+    def set_series_color(self, sender: DPGItem, color: list[int]):
         series_id = dpg.get_item_user_data(sender)
         assert series_id
         series = self.project.series[series_id]
@@ -692,6 +671,8 @@ class UI:
         if dpg.does_item_exist("loading_indicator"):
             dpg.configure_item("loading_indicator", pos=(w // 2 - 100, h // 2 - 100))
 
+        dpg.configure_item("settings_window", pos=[w // 2 - 350, h // 2 - 200])
+
     def toggle_fitting_windows(self):
         state = self.settings.fitting_windows_shown.value
 
@@ -739,6 +720,8 @@ class UI:
                             dpg.add_drag_line(
                                 color=series.color,
                                 default_value=e,
+                                user_data=e,
+                                callback=lambda s, d: self.lock_drag_item(s, d),
                                 parent="libs_plots",
                                 label=f"{series.name}_fitting_window_{i+1}",
                                 tag=f"{series.id}_fitting_window_{i+1}",
@@ -781,11 +764,16 @@ class UI:
                             color=s.color,
                             default_value=(peak[0], peak[1]),
                             parent="libs_plots",
-                            label=f"{s.name}_peak_{i}",
+                            label=f"{s.name} peak {i}",
                             tag=f"{s.id}_peak_{i}",
+                            user_data=(peak[0], peak[1]),
+                            callback=lambda s, d: self.lock_drag_item(s, d),
                         )
 
         self.refresh_peak_table()
+
+    def lock_drag_item(self, sender: DPGItem, data):
+        dpg.set_value(sender, (dpg.get_item_user_data(sender)))
 
     def refresh_fitting_windows(self):
         if self.settings.fitting_windows_shown.value:
@@ -823,7 +811,9 @@ class UI:
     def refresh_peak_table(self):
         if not self.project.selected_series:
             return
-        self.peak_table.peaks = self.project.selected_series[0].averaged.peaks
+        series = self.project.selected_series[0]
+        self.peak_table.series = series
+        self.peak_table.peaks = series.averaged.peaks
 
     def handle_region_guide(self, guide, start_or_end: Literal[0, 1]):
         start_value = dpg.get_value("region_guide_start")
@@ -902,7 +892,7 @@ class UI:
 
         self.refresh_all()
 
-    def plot_query_callback(self, sender, data):
+    def plot_query_callback(self, sender: DPGItem, data):
         with dpg.mutex():
             region = list(data[0:2])
             if not region == self.project.selected_region:
@@ -1048,7 +1038,7 @@ class UI:
                     with dpg.collapsing_header(label="Plots", default_open=True):
                         with dpg.child_window(
                             width=-1,
-                            height=400,
+                            height=300,
                             no_scrollbar=True,
                         ):
                             with dpg.group(horizontal=True):
@@ -1300,19 +1290,6 @@ class UI:
             pass
 
         with dpg.window(
-            label="Settings",
-            tag="settings_modal",
-            show=False,
-            no_move=True,
-            no_collapse=True,
-            modal=True,
-            width=700,
-            height=400,
-            no_resize=True,
-        ):
-            pass
-
-        with dpg.window(
             label="Fitting results",
             tag="fitting_results",
             width=800,
@@ -1323,24 +1300,3 @@ class UI:
             autosize=True,
         ):
             dpg.add_text(tag="fitting_results_text")
-
-        w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
-        with dpg.window(
-            modal=True,
-            no_background=True,
-            no_move=True,
-            no_scrollbar=True,
-            no_title_bar=True,
-            no_close=True,
-            no_resize=True,
-            tag="loading_indicator",
-            show=False,
-            pos=(w // 2 - 100, h // 2 - 100),
-        ):
-            dpg.add_loading_indicator(radius=20)
-            dpg.add_button(
-                label="Loading hyperspectral datapass",
-                indent=30,
-                tag="loading_indicator_message",
-            )
-            dpg.bind_item_theme(dpg.last_item(), self.button_theme)

@@ -40,6 +40,8 @@ from scipy.interpolate import UnivariateSpline
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import find_peaks
 
+DPGItem = str | int
+
 from src.settings import BaselineRemoval
 
 PA_READ_OPTIONS = csv.ReadOptions(skip_rows=2, autogenerate_column_names=True)
@@ -58,7 +60,7 @@ PA_CONVERT_OPTIONS_SKIP_X = csv.ConvertOptions(
     include_columns=["f1"],
 )
 
-LOADING_INDICATOR_FETCH_DELAY_S = 0.01
+LOADING_INDICATOR_FETCH_DELAY_S = 0.1
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 logging.basicConfig(filename=Path(ROOT_DIR, "log/main.log"), filemode="a")
 coloredlogs.install(level="DEBUG")
