@@ -278,6 +278,16 @@ class UI:
             self.periodic_table.toggle()
         if dpg.is_key_pressed(dpg.mvKey_Comma):
             self.settings_window.toggle()
+        if dpg.is_key_pressed(dpg.mvKey_B):
+            self.toggle_sidebar()
+
+        if dpg.is_key_down(dpg.mvKey_Alt):
+            if dpg.is_key_down(dpg.mvKey_Shift):
+                if dpg.is_key_pressed(dpg.mvKey_M):
+                    dpg.show_tool(dpg.mvTool_Metrics)
+            elif dpg.is_key_pressed(dpg.mvKey_M):
+                menubar_visible = dpg.get_item_configuration(WINDOW_TAG)["menubar"]
+                dpg.configure_item(WINDOW_TAG, menubar=(not menubar_visible))
 
     def series_left_click(self):
         if not dpg.is_item_clicked("series_list_wrapper"):
@@ -375,7 +385,7 @@ class UI:
                             f"{series.samples_total} samples with {series.spectra_total} spectra total"
                         )
 
-                        dpg.add_text("")
+                        dpg.add_separator()
                         dpg.add_text("Drop first n spectra in samples:")
                         dpg.add_slider_int(
                             min_value=0,
@@ -386,6 +396,15 @@ class UI:
                                 series, d
                             ),
                         )
+
+                        with dpg.group(horizontal=True):
+                            dpg.add_button(label="I", tag=f"{series.id}_save_plot_png")
+                            with dpg.tooltip(dpg.last_item()):
+                                dpg.add_text("Save as .png image")
+                                
+                            dpg.add_button(label="E", tag=f"{series.id}_export_spectrum_csv")
+                            with dpg.tooltip(dpg.last_item()):
+                                dpg.add_text("Export averaged spectrum")
 
     def set_series_drop_first_n(self, series: Series, drop_first_n: int):
         with dpg.mutex():
@@ -717,6 +736,9 @@ class UI:
                         assert series.color
 
                         for i, e in enumerate(win_starts[1:]):
+                            if dpg.does_item_exist(f"{series.id}_fitting_window_{i+1}"):
+                                dpg.delete_item(f"{series.id}_fitting_window_{i+1}")
+
                             dpg.add_drag_line(
                                 color=series.color,
                                 default_value=e,
@@ -941,6 +963,11 @@ class UI:
                         label="Toggle Fullscreen",
                         shortcut="(F11)",
                         callback=lambda _s, _d: dpg.toggle_viewport_fullscreen(),
+                    )
+                    dpg.add_menu_item(
+                        label="Toggle Sidebar",
+                        shortcut="(Ctrl+B)",
+                        callback=lambda _s, _d: self.toggle_sidebar(),
                     )
                 with dpg.menu(label="Tools"):
                     with dpg.menu(label="Developer"):
@@ -1287,16 +1314,10 @@ class UI:
             height=600,
             tag="project_directory_picker",
         ):
-            pass
+            ...
 
-        with dpg.window(
-            label="Fitting results",
-            tag="fitting_results",
-            width=800,
-            height=600,
-            menubar=True,
-            show=False,
-            no_scrollbar=True,
-            autosize=True,
-        ):
-            dpg.add_text(tag="fitting_results_text")
+    def toggle_sidebar(self):
+        if not dpg.is_item_shown("sidebar"):
+            dpg.show_item("sidebar")
+        else:
+            dpg.hide_item("sidebar")

@@ -197,7 +197,7 @@ class Peak:
 
     def __attrs_post_init__(self):
         self.id = uuid.uuid4().int & (1 << 64) - 1
-        self.prefix = f"peak{self.id}"
+        self.prefix = f"peak_{self.id}"
         self.model = PseudoVoigtModel(prefix=self.prefix)
 
     def estimate_params(self, win_x, win_y):
@@ -260,7 +260,7 @@ class Peak:
         self.amplitude = area / self.sigma * 0.55
 
 
-@define(auto_attribs=True)
+@define(auto_attribs=True, repr=False)
 class Spectrum:
     file: Path | None = field(default=None)
     raw_spectral_data: npt.NDArray | None = field(default=None, repr=False)
@@ -270,6 +270,7 @@ class Spectrum:
     common_x: npt.NDArray | None = field(default=None, repr=False)
     peaks: npt.NDArray | None = field(init=False, default=None)
     fitting_windows: Windows = field(init=False, factory=list)
+    series: Any = field(init=False, default=None)
 
     def __attrs_post_init__(self):
         if self.raw_spectral_data is None and self.file is not None:
@@ -501,7 +502,7 @@ class Spectrum:
 
         return windows
 
-    def fit_window(self, window: Window, max_iterations: int | None = None):
+    def _fit_window(self, window: Window, max_iterations: int | None = None):
         if not isinstance(self.peaks, np.ndarray):
             self.find_peaks(window)
         if not isinstance(self.peaks, np.ndarray):
@@ -672,14 +673,14 @@ class Spectrum:
 
     @log_exec_time
     @partial(loading_indicator, message="Fitting series")
-    def fit_windows_parallel(self, windows: Windows, max_iterations: int):
+    def fit_windows_parallel(self, windows: Windows, max_iterations: int | None = None):
         if len(windows) == 0:
             return
 
         with Pool(processes=CPU_COUNT) as pool:
             pool.restart()
             try:
-                fitting_func = partial(self.fit_window, max_iterations=max_iterations)
+                fitting_func = partial(self._fit_window, max_iterations=max_iterations)
                 result = pool.amap(fitting_func, windows)
                 while not result.ready():
                     yield (1 - result._number_left / len(windows)) * 100
@@ -719,7 +720,7 @@ class Spectrum:
         return Fit.from_fit_results(self, windows, fit_results)
 
 
-@define
+@define(repr=False)
 class Sample:
     directory: Path
     name: str = field(init=False)
@@ -740,6 +741,56 @@ class Sample:
 
 
 @define
+class Fit:
+    id: str = field(init=False, default=0)
+    data: Spectrum
+    r_squared_mean: np.float_ = field(init=False)
+    r_squared_min: np.float_ = field(init=False)
+    r_squared_st_dev: np.float_ = field(init=False)
+    windows: Windows
+    windows_total: int = field(init=False)
+    fit_results: list[ModelResult]
+    components: list[Spectrum] = field(init=False, factory=list)
+
+    def __attrs_post_init__(self):
+        self.id = uuid.uuid4().urn
+
+        r_squared = np.array([r.rsquared for r in self.fit_results])
+        self.r_squared_mean = np.mean(r_squared)
+        self.r_squared_min = np.min(r_squared)
+        self.r_squared_st_dev = np.std(r_squared)
+
+        comps = []
+        for result in self.fit_results:
+            for y in result.eval_components(x=self.data.x).values():
+                comps.append(Spectrum.from_data(np.array([self.data.x, y]).T))
+
+        self.components = comps
+
+    @classmethod
+    def from_fit_results(
+        cls, parent_spectrum: Spectrum, windows, fit_results: list[ModelResult | None]
+    ):
+        for r in fit_results:
+            if r is None:
+                raise ValueError
+
+        x = parent_spectrum.x[
+            np.logical_and(
+                parent_spectrum.x >= windows[0][0] - 0.5 * parent_spectrum.step,
+                parent_spectrum.x <= windows[-1][1],
+            )
+        ]
+        y = np.concatenate(
+            [r.best_fit for r in fit_results]  # type:ignore
+        )
+
+        data = Spectrum.from_data(np.array([x, y]).T)
+
+        return cls(data=data, fit_results=fit_results, windows=windows)  # type:ignore
+
+
+@define(repr=False)
 class Series:
     directory: Path
     name: str | None = field(default=None)
@@ -752,6 +803,7 @@ class Series:
     spectra_total: int = field(init=False)
     samples_total: int = field(init=False)
     _averaged: Spectrum | None = field(init=False, default=None)
+    fits: Mapping[str, Fit] = field(init=False, factory=dict)
 
     def __attrs_post_init__(self):
         self.id = uuid.uuid4().urn
@@ -777,6 +829,7 @@ class Series:
             data = np.array([s.raw_spectral_data for s in spectra])
             spectrum = Spectrum.from_data(data.mean(axis=0))
             self._averaged = spectrum
+            self._averaged.series = self
             return spectrum
 
         return self._averaged
@@ -786,7 +839,7 @@ class Series:
 class Project:
     directory: Path
     series_dirs: list[Path] = field(init=False, factory=list)
-    series: Mapping[str, Series] = field(init=False, factory=list)
+    series: Mapping[str, Series] = field(init=False, factory=dict)
     plotted_series_ids: set[str] = field(init=False, default=set())
     selected_region: list[float | None] = field(init=False, default=[None, None])
     common_x: bool = field(default=False)
@@ -842,42 +895,3 @@ class Project:
             finally:
                 pool.close()
                 pool.join()
-
-
-@define
-class Fit:
-    data: Spectrum
-    r_squared_mean: np.float_ = field(init=False)
-    r_squared_min: np.float_ = field(init=False)
-    r_squared_st_dev: np.float_ = field(init=False)
-    windows: Windows
-    windows_total: int = field(init=False)
-    fit_results: list[ModelResult]
-
-    def __attrs_post_init__(self):
-        r_squared = np.array([r.rsquared for r in self.fit_results])
-        self.r_squared_mean = np.mean(r_squared)
-        self.r_squared_min = np.min(r_squared)
-        self.r_squared_st_dev = np.std(r_squared)
-
-    @classmethod
-    def from_fit_results(
-        cls, parent_spectrum: Spectrum, windows, fit_results: list[ModelResult | None]
-    ):
-        for r in fit_results:
-            if r is None:
-                raise ValueError
-
-        x = parent_spectrum.x[
-            np.logical_and(
-                parent_spectrum.x >= windows[0][0] - 0.5 * parent_spectrum.step,
-                parent_spectrum.x <= windows[-1][1],
-            )
-        ]
-        y = np.concatenate(
-            [r.best_fit for r in fit_results]  # type:ignore
-        )
-
-        data = Spectrum.from_data(np.array([x, y]).T)
-
-        return cls(data=data, fit_results=fit_results, windows=windows)  # type:ignore

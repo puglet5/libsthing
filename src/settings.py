@@ -4,7 +4,7 @@ from typing import Callable, Generator, Literal, TypedDict
 import dearpygui.dearpygui as dpg
 from attrs import define, field, fields
 
-from utils import DPGItem
+from src.utils import DPGItem
 
 
 class BaselineRemoval(StrEnum):

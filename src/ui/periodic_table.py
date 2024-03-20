@@ -3,7 +3,7 @@ import logging
 import dearpygui.dearpygui as dpg
 from attrs import define, field
 
-from utils import DPGItem
+from src.utils import DPGItem
 
 logger = logging.getLogger(__name__)
 
