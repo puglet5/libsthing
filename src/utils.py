@@ -809,7 +809,10 @@ class Fit:
 
     @classmethod
     def from_fit_results(
-        cls, parent_spectrum: Spectrum, windows: Windows, fit_results: list[FitResult | None]
+        cls,
+        parent_spectrum: Spectrum,
+        windows: Windows,
+        fit_results: list[FitResult | None],
     ):
         for r in fit_results:
             if r is None:
@@ -839,6 +842,7 @@ class Fit:
             windows=windows,
             components=components,
         )
+
 
 @define(repr=False)
 class Series:

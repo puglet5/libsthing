@@ -49,8 +49,11 @@ class UI:
         dpg.create_context()
 
         with dpg.font_registry():
-            with dpg.font(Path("./src/fonts/cozette.ttf").absolute().as_posix(), 13):
+            with dpg.font(
+                Path("./src/fonts/basis33.ttf").absolute().as_posix(), 16
+            ) as default_font:
                 dpg.add_font_range(0x0370, 0x03FF)
+                dpg.add_font_range(0x0400, 0x04FF)
 
         dpg.create_viewport(title="libsthing", width=1920, height=1080, vsync=True)
         dpg.configure_app(wait_for_input=False)
@@ -67,6 +70,8 @@ class UI:
 
         self.setup_layout()
         self.bind_item_handlers()
+
+        dpg.bind_font(default_font)
 
     def start(self, dev=False, debug=False):
         dpg.setup_dearpygui()
@@ -1347,11 +1352,17 @@ class UI:
                                 ):
                                     with dpg.group(horizontal=True):
                                         dpg.add_text("  ".rjust(LABEL_PAD))
-                                        dpg.add_button(label="All",width=75)
-                                        with dpg.tooltip(parent=dpg.last_item(),delay=TOOLTIP_DELAY_SEC):
+                                        dpg.add_button(label="All", width=75)
+                                        with dpg.tooltip(
+                                            parent=dpg.last_item(),
+                                            delay=TOOLTIP_DELAY_SEC,
+                                        ):
                                             dpg.add_text("Select all fits")
                                         dpg.add_button(label="None", width=-1)
-                                        with dpg.tooltip(parent=dpg.last_item(),delay=TOOLTIP_DELAY_SEC):
+                                        with dpg.tooltip(
+                                            parent=dpg.last_item(),
+                                            delay=TOOLTIP_DELAY_SEC,
+                                        ):
                                             dpg.add_text("Deselect all fits")
 
                                     with dpg.group(horizontal=True):

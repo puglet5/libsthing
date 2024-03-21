@@ -34,7 +34,7 @@ class PeakTable:
             max_size=(800, 600),
             tag="peak_table_window",
             no_scrollbar=True,
-            on_close=self.on_close
+            on_close=self.on_close,
         ):
             with dpg.table(
                 hideable=True,
@@ -55,6 +55,7 @@ class PeakTable:
                 dpg.add_table_column(label="Cnts., rel.")
                 dpg.add_table_column(label="Area, cnts*nm")
                 dpg.add_table_column(label="FWHM, nm")
+                dpg.add_table_column(label="σ, nm")
 
     def is_shown(self):
         return dpg.is_item_shown("peak_table_window")
@@ -115,8 +116,11 @@ class PeakTable:
         self.selected_rows = set()
 
     def on_close(self):
-        row_i: int = dpg.get_item_user_data(self.hovered_row)  # type: ignore
-        dpg.configure_item(f"{self.series.id}_peak_{row_i}", color=self.series.color)
+        if self.hovered_row != 0:
+            row_i: int = dpg.get_item_user_data(self.hovered_row)  # type: ignore
+            dpg.configure_item(
+                f"{self.series.id}_peak_{row_i}", color=self.series.color
+            )
 
     def highlight_drag_point(self, _, row):
         if self.hovered_row == row:
