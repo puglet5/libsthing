@@ -19,6 +19,7 @@ from typing import (
     Sequence,
     Sized,
     TypeAlias,
+    TypedDict,
     TypeVar,
     assert_never,
 )
@@ -182,83 +183,6 @@ def np_delete_row(arr: np.ndarray, num: int):
     mask = np.zeros(arr.shape[0], dtype=np.int64) == 0
     mask[np.where(arr == num)[0]] = False
     return arr[mask]
-
-
-@define
-class Peak:
-    x: float
-    y: float
-    model: Any = field(init=False, default=None)
-    id: int = field(init=False, default=0)
-    prefix: str = field(init=False, default="")
-    fwhm: float | None = field(init=False, default=None)
-    amplitude: float | None = field(init=False, default=None)
-    sigma: float | None = field(init=False, default=None)
-
-    def __attrs_post_init__(self):
-        self.id = uuid.uuid4().int & (1 << 64) - 1
-        self.prefix = f"peak_{self.id}"
-        self.model = PseudoVoigtModel(prefix=self.prefix)
-
-    def estimate_params(self, win_x, win_y):
-        hwhm = 0
-        start_x_index = np.where(np.isclose(win_x, self.x))[0][0]
-        curr_x_index = start_x_index
-
-        # go right
-        while curr_x_index < len(win_x) - 1:
-            if win_y[curr_x_index] > win_y[start_x_index]:
-                break
-            if win_y[curr_x_index] <= 0.5 * win_y[start_x_index]:
-                break
-            curr_x_index += 1
-
-        hwhm = win_x[curr_x_index] - win_x[start_x_index]
-        integration_x = win_x[
-            np.logical_and(win_x >= self.x, win_x <= win_x[curr_x_index])
-        ]
-        integration_y = win_y[
-            np.logical_and(win_x >= self.x, win_x <= win_x[curr_x_index])
-        ]
-        area = np.trapz(integration_y, integration_x)
-
-        # go left
-        if curr_x_index - start_x_index == 1:
-            curr_x_index = start_x_index
-            while curr_x_index >= 0:
-                if win_y[curr_x_index] > win_y[start_x_index]:
-                    break
-                if win_y[curr_x_index] <= 0.5 * win_y[start_x_index]:
-                    break
-                curr_x_index -= 1
-
-                hwhm = -win_x[curr_x_index] + win_x[start_x_index]
-
-                integration_x = win_x[
-                    np.logical_and(
-                        win_x <= self.x,
-                        win_x >= win_x[curr_x_index],
-                    )
-                ]
-                integration_y = win_y[
-                    np.logical_and(
-                        win_x <= self.x,
-                        win_x >= win_x[curr_x_index],
-                    )
-                ]
-
-                area = np.trapz(integration_y, integration_x)
-
-        if hwhm == 0:
-            self.fwhm = 0
-            self.sigma = 0.3
-            self.amplitude = self.y
-            return
-
-        self.fwhm = hwhm * 2
-        self.sigma = self.fwhm / 3.6
-        self.amplitude = area / self.sigma * 0.55
-
 
 @define(auto_attribs=True, repr=False)
 class Spectrum:
@@ -525,18 +449,27 @@ class Spectrum:
         if len(selected_peaks_xy) == 0:
             return None
 
-        selected_peaks = [Peak(*xy) for xy in selected_peaks_xy]
-
         win_x, win_y = (
             self.x[np.logical_and(self.x >= x_min, self.x <= x_max)],
             self.y[np.logical_and(self.x >= x_min, self.x <= x_max)],
         )
 
+        peaks = [
+            Peak(
+                x,
+                y,
+                Spectrum.from_data(np.array([win_x, win_y]).T),
+            )
+            for x, y in selected_peaks_xy
+        ]
+
         params = Parameters()
-        for peak in selected_peaks:
-            peak.estimate_params(win_x, win_y)
-            params.add(f"{peak.prefix}sigma", min=0.1, max=2, value=peak.sigma)
-            params.add(f"{peak.prefix}amplitude", min=0, value=peak.amplitude)
+        for peak in peaks:
+            peak.estimate_params()
+            params.add(
+                f"{peak.prefix}sigma", min=0.1, max=2, value=peak.sigma_estimated
+            )
+            params.add(f"{peak.prefix}amplitude", min=0, value=peak.amplitude_estimated)
             params.add(f"{peak.prefix}fraction", min=0, max=1, value=0.5)
             params.add(
                 f"{peak.prefix}center",
@@ -545,7 +478,7 @@ class Spectrum:
                 value=peak.x,
             )
 
-        model: Model = np.sum([peak.model for peak in selected_peaks])
+        model: Model = np.sum([peak.model for peak in peaks])
 
         try:
             result = model.fit(win_y, params=params, x=win_x, max_nfev=max_iterations)
@@ -553,7 +486,20 @@ class Spectrum:
             logger.error(f"Wrong fit parameters: {e}")
             return None
 
-        return result
+        components = list(result.eval_components().values())
+        parameters = result.params
+        for peak_i, peak in enumerate(peaks):
+            peak.fitted = Spectrum.from_data(
+                np.array([peak.data.x, components[peak_i]]).T
+            )
+            peak.sigma_fitted = parameters[f"peak_{peak.id}sigma"].value
+            peak.amplitude_fitted = parameters[f"peak_{peak.id}amplitude"].value
+            peak.fraction_fitted = parameters[f"peak_{peak.id}fraction"].value
+            peak.center_fitted = parameters[f"peak_{peak.id}center"].value
+
+        fit_result: FitResult = {"model_result": result, "peaks": peaks}
+
+        return fit_result
 
     def _generate_split_ids(
         self,
@@ -692,7 +638,7 @@ class Spectrum:
                         pool.join()
                         return None
 
-                fit_results: list[ModelResult | None] = result.get()
+                fit_results: list[FitResult | None] = result.get()
             except Exception as e:
                 logger.error(f"Error while fitting: {e}")
                 pool.terminate()
@@ -706,7 +652,7 @@ class Spectrum:
 
         try:
             for r in fit_results:
-                if not isinstance(r, ModelResult):
+                if r is None:
                     raise ValueError(
                         "Fitting failed in some windows. \
                             Possibly too many fit parameters for a given window size"
@@ -717,7 +663,100 @@ class Spectrum:
 
         assert isinstance(fit_results, list)
 
-        return Fit.from_fit_results(self, windows, fit_results)
+        fit = Fit.from_fit_results(self, windows, fit_results)
+
+        self.series.fits[fit.id] = fit
+
+
+@define(repr=False)
+class Peak:
+    x: float
+    y: float
+    data: Spectrum
+    fitted: Spectrum = field(init=False)
+    model: Any = field(init=False, default=None)
+    id: int = field(init=False, default=0)
+    prefix: str = field(init=False, default="")
+    fwhm_estimated: float | None = field(init=False, default=None)
+    amplitude_estimated: float | None = field(init=False, default=None)
+    sigma_estimated: float | None = field(init=False, default=None)
+    fwhm_fitted: float | None = field(init=False, default=None)
+    amplitude_fitted: float | None = field(init=False, default=None)
+    sigma_fitted: float | None = field(init=False, default=None)
+    fraction_fitted: float | None = field(init=False, default=None)
+    center_fitted: float | None = field(init=False, default=None)
+
+    def __attrs_post_init__(self):
+        self.id = uuid.uuid4().int & (1 << 64) - 1
+        self.prefix = f"peak_{self.id}"
+        self.model = PseudoVoigtModel(prefix=self.prefix)
+
+    def estimate_params(self):
+        win_x = self.data.x
+        win_y = self.data.y
+
+        hwhm = 0.0
+        start_x_index: int = np.where(np.isclose(win_x, self.x))[0][0]
+        curr_x_index: int = start_x_index
+
+        # go right
+        while curr_x_index < len(win_x) - 1:
+            if win_y[curr_x_index] > win_y[start_x_index]:
+                break
+            if win_y[curr_x_index] <= 0.5 * win_y[start_x_index]:
+                break
+            curr_x_index += 1
+
+        hwhm = win_x[curr_x_index] - win_x[start_x_index]
+        integration_x = win_x[
+            np.logical_and(win_x >= self.x, win_x <= win_x[curr_x_index])
+        ]
+        integration_y = win_y[
+            np.logical_and(win_x >= self.x, win_x <= win_x[curr_x_index])
+        ]
+        area = np.trapz(integration_y, integration_x)
+
+        # go left
+        if curr_x_index - start_x_index == 1:
+            curr_x_index = start_x_index
+            while curr_x_index >= 0:
+                if win_y[curr_x_index] > win_y[start_x_index]:
+                    break
+                if win_y[curr_x_index] <= 0.5 * win_y[start_x_index]:
+                    break
+                curr_x_index -= 1
+
+                hwhm: float = -win_x[curr_x_index] + win_x[start_x_index]
+
+                integration_x = win_x[
+                    np.logical_and(
+                        win_x <= self.x,
+                        win_x >= win_x[curr_x_index],
+                    )
+                ]
+                integration_y = win_y[
+                    np.logical_and(
+                        win_x <= self.x,
+                        win_x >= win_x[curr_x_index],
+                    )
+                ]
+
+                area = np.trapz(integration_y, integration_x)
+
+        if hwhm == 0.0:
+            self.fwhm_estimated = 0.0
+            self.sigma_estimated = 0.3
+            self.amplitude_estimated = self.y
+            return
+
+        self.fwhm_estimated = hwhm * 2
+        self.sigma_estimated = self.fwhm_estimated / 3.6
+        self.amplitude_estimated = area / self.sigma_estimated * 0.55
+
+
+class FitResult(TypedDict):
+    model_result: ModelResult
+    peaks: list[Peak]
 
 
 @define(repr=False)
@@ -740,7 +779,7 @@ class Sample:
         return Spectrum.from_data(data.mean(axis=0))
 
 
-@define
+@define(repr=False)
 class Fit:
     id: str = field(init=False, default=0)
     data: Spectrum
@@ -748,28 +787,21 @@ class Fit:
     r_squared_min: np.float_ = field(init=False)
     r_squared_st_dev: np.float_ = field(init=False)
     windows: Windows
-    windows_total: int = field(init=False)
-    fit_results: list[ModelResult]
-    components: list[Spectrum] = field(init=False, factory=list)
+    windows_total: int = field(init=False, default=1)
+    fit_results: list[FitResult]
+    components: Mapping[str, Peak]
 
     def __attrs_post_init__(self):
         self.id = uuid.uuid4().urn
 
-        r_squared = np.array([r.rsquared for r in self.fit_results])
+        r_squared = np.array([r["model_result"].rsquared for r in self.fit_results])
         self.r_squared_mean = np.mean(r_squared)
         self.r_squared_min = np.min(r_squared)
         self.r_squared_st_dev = np.std(r_squared)
 
-        comps = []
-        for result in self.fit_results:
-            for y in result.eval_components(x=self.data.x).values():
-                comps.append(Spectrum.from_data(np.array([self.data.x, y]).T))
-
-        self.components = comps
-
     @classmethod
     def from_fit_results(
-        cls, parent_spectrum: Spectrum, windows, fit_results: list[ModelResult | None]
+        cls, parent_spectrum: Spectrum, windows: Windows, fit_results: list[FitResult | None]
     ):
         for r in fit_results:
             if r is None:
@@ -782,12 +814,23 @@ class Fit:
             )
         ]
         y = np.concatenate(
-            [r.best_fit for r in fit_results]  # type:ignore
+            [r["model_result"].best_fit for r in fit_results]  # type:ignore
         )
+
+        components = {}
+        for result in fit_results:
+            assert result
+            for peak in result["peaks"]:
+                components[peak.id] = peak
 
         data = Spectrum.from_data(np.array([x, y]).T)
 
-        return cls(data=data, fit_results=fit_results, windows=windows)  # type:ignore
+        return cls(
+            data=data,
+            fit_results=fit_results,  # type:ignore
+            windows=windows,
+            components=components,
+        )
 
 
 @define(repr=False)

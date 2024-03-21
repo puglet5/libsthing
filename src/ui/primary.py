@@ -401,7 +401,7 @@ class UI:
                             dpg.add_button(label="I", tag=f"{series.id}_save_plot_png")
                             with dpg.tooltip(dpg.last_item()):
                                 dpg.add_text("Save as .png image")
-                                
+
                             dpg.add_button(label="E", tag=f"{series.id}_export_spectrum_csv")
                             with dpg.tooltip(dpg.last_item()):
                                 dpg.add_text("Export averaged spectrum")
@@ -673,17 +673,9 @@ class UI:
             spectrum.fitting_windows = [region]
 
         max_iterations = self.settings.fitting_max_iterations.value
-        fitted = spectrum.fit_windows_parallel(
+        spectrum.fit_windows_parallel(
             spectrum.fitting_windows, max_iterations=max_iterations
         )
-        if fitted is not None:
-            x, y = fitted.data.xy
-            dpg.add_line_series(
-                x,
-                y,
-                parent="libs_y_axis",
-                label=f"Fitted",
-            )
 
     def window_resize_callback(self, _sender=None, _data=None):
         w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
