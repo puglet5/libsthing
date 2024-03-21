@@ -184,7 +184,8 @@ def np_delete_row(arr: np.ndarray, num: int):
     mask[np.where(arr == num)[0]] = False
     return arr[mask]
 
-@define(auto_attribs=True, repr=False)
+
+@define(repr=False)
 class Spectrum:
     file: Path | None = field(default=None)
     raw_spectral_data: npt.NDArray | None = field(default=None, repr=False)
@@ -194,7 +195,7 @@ class Spectrum:
     common_x: npt.NDArray | None = field(default=None, repr=False)
     peaks: npt.NDArray | None = field(init=False, default=None)
     fitting_windows: Windows = field(init=False, factory=list)
-    series: Any = field(init=False, default=None)
+    series: "Series | None" = field(init=False, default=None)
 
     def __attrs_post_init__(self):
         if self.raw_spectral_data is None and self.file is not None:
@@ -665,6 +666,9 @@ class Spectrum:
 
         fit = Fit.from_fit_results(self, windows, fit_results)
 
+        if not self.series:
+            return
+
         self.series.fits[fit.id] = fit
 
 
@@ -790,6 +794,8 @@ class Fit:
     windows_total: int = field(init=False, default=1)
     fit_results: list[FitResult]
     components: Mapping[str, Peak]
+    selected: bool = field(init=False, default=True)
+    x_bounds: tuple[float, float] = field(init=False, default=(0, 0))
 
     def __attrs_post_init__(self):
         self.id = uuid.uuid4().urn
@@ -798,6 +804,8 @@ class Fit:
         self.r_squared_mean = np.mean(r_squared)
         self.r_squared_min = np.min(r_squared)
         self.r_squared_st_dev = np.std(r_squared)
+
+        self.x_bounds = (self.data.x[0], self.data.x[-1])
 
     @classmethod
     def from_fit_results(
@@ -832,7 +840,6 @@ class Fit:
             components=components,
         )
 
-
 @define(repr=False)
 class Series:
     directory: Path
@@ -846,7 +853,7 @@ class Series:
     spectra_total: int = field(init=False)
     samples_total: int = field(init=False)
     _averaged: Spectrum | None = field(init=False, default=None)
-    fits: Mapping[str, Fit] = field(init=False, factory=dict)
+    fits: dict[str, Fit] = field(init=False, factory=dict)
 
     def __attrs_post_init__(self):
         self.id = uuid.uuid4().urn
@@ -884,6 +891,7 @@ class Project:
     series_dirs: list[Path] = field(init=False, factory=list)
     series: Mapping[str, Series] = field(init=False, factory=dict)
     plotted_series_ids: set[str] = field(init=False, default=set())
+    plotted_fits_ids: set[str] = field(init=False, default=set())
     selected_region: list[float | None] = field(init=False, default=[None, None])
     common_x: bool = field(default=False)
     sample_drop_first: int = field(default=0)

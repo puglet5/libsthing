@@ -106,7 +106,7 @@ class UI:
             spectra_normalized=Setting(
                 "settings_spectra_normalized",
                 False,
-                self.show_libs_plots,
+                self.show_all_plots,
             ),
             spectra_fit_to_axes=Setting(
                 "settings_spectra_fit_to_axes",
@@ -267,6 +267,17 @@ class UI:
         with dpg.item_handler_registry(tag="window_resize_handler"):
             dpg.add_item_resize_handler(callback=self.window_resize_callback)
 
+        with dpg.item_handler_registry(tag="fit_lmb_handler"):
+            dpg.add_item_clicked_handler(
+                dpg.mvMouseButton_Left,
+                callback=lambda s, d: self.fits_lmb_callback(s, d),
+            )
+
+            dpg.add_item_clicked_handler(
+                dpg.mvMouseButton_Right,
+                callback=lambda s, d: self.fits_rmb_callback(s, d),
+            )
+
     def on_key_ctrl_release(self):
         dpg.configure_item("libs_plots", pan_button=dpg.mvMouseButton_Left)
 
@@ -281,7 +292,7 @@ class UI:
         if dpg.is_key_pressed(dpg.mvKey_B):
             self.toggle_sidebar()
         if dpg.is_key_pressed(dpg.mvKey_N):
-            self.toggle_sidebar_right()
+            self.toggle_botton_bar()
 
         if dpg.is_key_down(dpg.mvKey_Alt):
             if dpg.is_key_down(dpg.mvKey_Shift):
@@ -349,6 +360,8 @@ class UI:
                         series.selected = False
 
         self.show_libs_plots()
+        self.refresh_fit_results()
+        self.show_fit_plots()
 
     def series_right_click(self):
         series_rows = dpg.get_item_children("series_list_wrapper", slot=1)
@@ -479,6 +492,7 @@ class UI:
             "sidebar_series",
             height=series_window_height,
         )
+        self.refresh_fit_results()
 
     def directory_picker_callback(self, _sender: DPGItem, data):
         dpg.set_value("project_directory", data["file_path_name"])
@@ -492,6 +506,8 @@ class UI:
         with dpg.mutex():
             self.populate_series_list(skip_plot_update=True)
             self.show_libs_plots()
+            self.refresh_fit_results()
+            self.show_fit_plots()
 
     def show_libs_plots(self):
         range_from = self.settings.normalized_from.value
@@ -540,7 +556,7 @@ class UI:
                         x,
                         y,
                         parent="libs_y_axis",
-                        label=f"{series.name}",
+                        label=f"{series.name} avg.",
                         tag=f"series_plot_{series.id}",
                     )
                     dpg.bind_item_theme(f"series_plot_{series.id}", plot_theme)
@@ -662,30 +678,34 @@ class UI:
             self.show_libs_plots()
 
     def perform_fit(self):
-        spectrum = self.project.selected_series[0].averaged
-        x_threshold = self.settings.fitting_x_threshold.value
-        y_threshold = self.settings.fitting_y_threshold.value
-        threshold_type = self.settings.fitting_y_threshold_type.value
-        subdivide = self.settings.region_subdivided.value
-        if None not in self.project.selected_region:
-            region: Window = self.project.selected_region  # type: ignore
-        else:
-            region = spectrum.x_limits
+        for series in self.project.selected_series:
+            spectrum = series.averaged
+            x_threshold = self.settings.fitting_x_threshold.value
+            y_threshold = self.settings.fitting_y_threshold.value
+            threshold_type = self.settings.fitting_y_threshold_type.value
+            subdivide = self.settings.region_subdivided.value
+            if None not in self.project.selected_region:
+                region: Window = self.project.selected_region  # type: ignore
+            else:
+                region = spectrum.x_limits
 
-        if subdivide:
-            spectrum.generate_fitting_windows(
-                region,
-                x_threshold=x_threshold,
-                y_threshold=y_threshold,
-                threshold_type=threshold_type,
+            if subdivide:
+                spectrum.generate_fitting_windows(
+                    region,
+                    x_threshold=x_threshold,
+                    y_threshold=y_threshold,
+                    threshold_type=threshold_type,
+                )
+            else:
+                spectrum.fitting_windows = [region]
+
+            max_iterations = self.settings.fitting_max_iterations.value
+            spectrum.fit_windows_parallel(
+                spectrum.fitting_windows, max_iterations=max_iterations
             )
-        else:
-            spectrum.fitting_windows = [region]
 
-        max_iterations = self.settings.fitting_max_iterations.value
-        spectrum.fit_windows_parallel(
-            spectrum.fitting_windows, max_iterations=max_iterations
-        )
+        self.refresh_fit_results()
+        self.show_fit_plots()
 
     def window_resize_callback(self, _sender=None, _data=None):
         w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
@@ -693,10 +713,6 @@ class UI:
             dpg.configure_item("loading_indicator", pos=(w // 2 - 100, h // 2 - 100))
 
         dpg.configure_item("settings_window", pos=[w // 2 - 350, h // 2 - 200])
-        if dpg.is_item_shown("sidebar_right"):
-            dpg.configure_item("data", width=(w - 700))
-        else:
-            dpg.configure_item("data", width=-1)
 
     def toggle_fitting_windows(self):
         state = self.settings.fitting_windows_shown.value
@@ -977,9 +993,9 @@ class UI:
                     )
 
                     dpg.add_menu_item(
-                        label="Toggle Right Sidebar",
+                        label="Toggle Bottom Bar",
                         shortcut="(Ctrl+N)",
-                        callback=lambda _s, _d: self.toggle_sidebar_right(),
+                        callback=lambda _s, _d: self.toggle_botton_bar(),
                     )
                 with dpg.menu(label="Tools"):
                     with dpg.menu(label="Developer"):
@@ -1063,7 +1079,7 @@ class UI:
                                     **self.settings.project_common_x.as_dict
                                 )
                             with dpg.group(horizontal=True):
-                                dpg.add_text("Drop first in samples".rjust(LABEL_PAD))
+                                dpg.add_text("Drop first n in samples".rjust(LABEL_PAD))
                                 dpg.add_input_int(
                                     width=-1,
                                     on_enter=True,
@@ -1292,47 +1308,107 @@ class UI:
                                     **self.settings.fitting_max_iterations.as_dict,
                                 )
 
-                w = dpg.get_viewport_width()
-                with dpg.child_window(border=False, width=(w - 700), tag="data"):
-                    with dpg.group(horizontal=True):
-                        with dpg.plot(
-                            tag="libs_plots",
-                            crosshairs=True,
-                            anti_aliased=True,
-                            query=True,
-                            query_button=dpg.mvMouseButton_Left,
-                            query_mod=1,
-                            callback=self.plot_query_callback,
-                            height=-1,
-                            width=-1,
-                        ):
-                            dpg.add_plot_legend(location=4)
-                            dpg.add_plot_axis(
-                                dpg.mvXAxis,
-                                label="Wavelength, nm",
-                                tag="libs_x_axis",
-                            )
-                            dpg.add_plot_axis(
-                                dpg.mvYAxis,
-                                label="Line Intensity (arb. unit of energy flux)",
-                                tag="libs_y_axis",
-                            )
+                with dpg.group(horizontal=False):
+                    with dpg.child_window(
+                        border=False, width=-1, height=-SIDEBAR_WIDTH, tag="data"
+                    ):
+                        with dpg.group(horizontal=True):
+                            with dpg.plot(
+                                tag="libs_plots",
+                                crosshairs=True,
+                                anti_aliased=True,
+                                query=True,
+                                query_button=dpg.mvMouseButton_Left,
+                                query_mod=1,
+                                callback=self.plot_query_callback,
+                                height=-1,
+                                width=-1,
+                            ):
+                                dpg.add_plot_legend(location=4)
+                                dpg.add_plot_axis(
+                                    dpg.mvXAxis,
+                                    label="Wavelength, nm",
+                                    tag="libs_x_axis",
+                                )
+                                dpg.add_plot_axis(
+                                    dpg.mvYAxis,
+                                    label="Line Intensity (arb. unit of energy flux)",
+                                    tag="libs_y_axis",
+                                )
 
-                with dpg.child_window(border=False, width=-1, tag="sidebar_right"):
-                    with dpg.collapsing_header(label="Fitting", default_open=True):
-                        with dpg.child_window(
-                            width=-1,
-                            height=500,
-                            no_scrollbar=True,
-                        ):
-                            dpg.add_text("test")
-                    with dpg.collapsing_header(label="Stuff", default_open=True):
-                        with dpg.child_window(
-                            width=-1,
-                            height=-1,
-                            no_scrollbar=True,
-                        ):
-                            dpg.add_text("test")
+                    with dpg.tab_bar(tag="bottom_bar"):
+                        with dpg.tab(label="Fit Results"):
+                            with dpg.group(horizontal=True):
+                                with dpg.child_window(
+                                    width=SIDEBAR_WIDTH,
+                                    height=-1,
+                                    no_scrollbar=True,
+                                    tag="fit_results_controls_window",
+                                ):
+                                    with dpg.group(horizontal=True):
+                                        dpg.add_text("  ".rjust(LABEL_PAD))
+                                        dpg.add_button(label="All",width=75)
+                                        with dpg.tooltip(parent=dpg.last_item(),delay=TOOLTIP_DELAY_SEC):
+                                            dpg.add_text("Select all fits")
+                                        dpg.add_button(label="None", width=-1)
+                                        with dpg.tooltip(parent=dpg.last_item(),delay=TOOLTIP_DELAY_SEC):
+                                            dpg.add_text("Deselect all fits")
+
+                                    with dpg.group(horizontal=True):
+                                        dpg.add_text(
+                                            "Fit display mode".rjust(LABEL_PAD)
+                                        )
+                                        dpg.add_combo(
+                                            items=["Sum", "Components", "Both", "None"],
+                                            default_value="Sum",
+                                            width=-1,
+                                        )
+                                    with dpg.group(horizontal=True):
+                                        dpg.add_text("Fit info".rjust(LABEL_PAD))
+                                        dpg.add_combo(
+                                            items=["Minimal", "Full"],
+                                            default_value="Minimal",
+                                            width=-1,
+                                        )
+
+                                    with dpg.group(horizontal=True):
+                                        dpg.add_text(
+                                            "Auto select new fits".rjust(LABEL_PAD)
+                                        )
+                                        dpg.add_checkbox(default_value=True)
+
+                                    with dpg.group(horizontal=True):
+                                        dpg.add_text(
+                                            "Include in legend".rjust(LABEL_PAD)
+                                        )
+                                        dpg.add_checkbox(default_value=False)
+
+                                    with dpg.group(horizontal=True):
+                                        dpg.add_text(
+                                            "Default fit color".rjust(LABEL_PAD)
+                                        )
+                                        dpg.add_combo(
+                                            items=["Series", "Negative", "Custom"],
+                                            default_value="Series",
+                                            width=-1,
+                                        )
+
+                                with dpg.child_window(
+                                    width=-1,
+                                    height=-1,
+                                    no_scrollbar=True,
+                                    tag="fit_results_window",
+                                ):
+                                    ...
+
+                        with dpg.tab(label="Calibration Plots"):
+                            with dpg.child_window(
+                                width=-1,
+                                height=-1,
+                                no_scrollbar=True,
+                                tag="calibration_plots_window",
+                            ):
+                                dpg.add_plot(height=-1, width=-1)
 
         with dpg.file_dialog(
             modal=True,
@@ -1351,10 +1427,196 @@ class UI:
         else:
             dpg.hide_item("sidebar")
 
-    def toggle_sidebar_right(self):
-        if not dpg.is_item_shown("sidebar_right"):
-            dpg.show_item("sidebar_right")
+    def toggle_botton_bar(self):
+        if not dpg.is_item_shown("bottom_bar"):
+            dpg.configure_item("data", height=-SIDEBAR_WIDTH)
+            dpg.show_item("bottom_bar")
         else:
-            dpg.hide_item("sidebar_right")
+            dpg.configure_item("data", height=-1)
+            dpg.hide_item("bottom_bar")
 
         self.window_resize_callback()
+
+    def refresh_fit_results(self):
+        dpg.delete_item("fit_results_window", children_only=True)
+
+        for series in self.project.selected_series:
+            with dpg.group(
+                horizontal=False, parent="fit_results_window", tag=f"{series.id}_fits"
+            ):
+                dpg.add_text(f"{series.name} fits")
+                dpg.add_separator()
+                if len(series.fits) == 0:
+                    dpg.add_text("No fits performed.")
+
+                fit_line_color = [255, 255, 255, 255] - np.array(series.color)
+                fit_line_color[-1] = 255
+
+                assert series.color
+                with dpg.theme() as plot_theme:
+                    with dpg.theme_component(dpg.mvLineSeries):
+                        dpg.add_theme_color(
+                            dpg.mvPlotCol_Line,
+                            fit_line_color.tolist(),
+                            category=dpg.mvThemeCat_Plots,
+                        )
+
+                with dpg.group(horizontal=True):
+                    for fit_id, fit in series.fits.items():
+                        fit_data = fit.data
+                        with dpg.group(
+                            horizontal=False,
+                            tag=f"{fit_id}_thumbnail_plot_wrapper",
+                            user_data={"fit": fit_id, "series": series.id},
+                        ):
+                            with dpg.plot(
+                                width=60,
+                                height=60,
+                                no_box_select=True,
+                                no_mouse_pos=True,
+                                no_menus=True,
+                                pan_button=-1,
+                                no_title=True,
+                                tag=f"{fit_id}_thumbnail_plot",
+                            ):
+                                dpg.add_plot_axis(
+                                    dpg.mvXAxis,
+                                    no_gridlines=True,
+                                    no_tick_labels=True,
+                                    no_tick_marks=True,
+                                    tag=f"{fit_id}_thumbnail_plot_x_axis",
+                                )
+                                dpg.add_plot_axis(
+                                    dpg.mvYAxis,
+                                    no_gridlines=True,
+                                    no_tick_labels=True,
+                                    no_tick_marks=True,
+                                    tag=f"{fit_id}_thumbnail_plot_y_axis",
+                                )
+                                dpg.add_line_series(
+                                    *fit_data.xy.tolist(),
+                                    parent=dpg.last_item(),
+                                    tag=f"{fit_id}_thumbnail_plot_series",
+                                )
+                                dpg.bind_item_theme(dpg.last_item(), plot_theme)
+
+                                dpg.set_axis_limits(
+                                    f"{fit_id}_thumbnail_plot_y_axis",
+                                    fit_data.y.min(),
+                                    fit_data.y.max(),
+                                )
+                                dpg.set_axis_limits(
+                                    f"{fit_id}_thumbnail_plot_x_axis",
+                                    fit_data.x.min(),
+                                    fit_data.x.max(),
+                                )
+
+                            x_bounds = f"{fit.x_bounds[0]:.0f}..{fit.x_bounds[1]:.0f}"
+                            dpg.add_text(x_bounds.center(8), indent=2)
+
+                            if fit.selected:
+                                dpg.bind_item_theme(
+                                    f"{fit_id}_thumbnail_plot",
+                                    self.active_thumbnail_plot_theme,
+                                )
+                            else:
+                                dpg.bind_item_theme(
+                                    f"{fit_id}_thumbnail_plot",
+                                    self.thumbnail_plot_theme,
+                                )
+                        dpg.bind_item_handler_registry(
+                            f"{fit_id}_thumbnail_plot_wrapper", "fit_lmb_handler"
+                        )
+
+    def show_fit_plots(self):
+        with dpg.mutex():
+            for s_id, series in self.project.series.items():
+                fits = series.fits
+                assert series.color
+
+                if series.selected:
+                    for fit_i, fit in fits.items():
+                        if fit.selected:
+                            x, y = fit.data.xy.tolist()
+
+                            fit_line_color = [255, 255, 255, 255] - np.array(
+                                series.color
+                            )
+                            fit_line_color[-1] = 255
+
+                            with dpg.theme() as plot_theme:
+                                with dpg.theme_component(dpg.mvLineSeries):
+                                    dpg.add_theme_color(
+                                        dpg.mvPlotCol_Line,
+                                        fit_line_color.tolist(),
+                                        category=dpg.mvThemeCat_Plots,
+                                    )
+
+                            if dpg.does_item_exist(f"fit_plot_{fit.id}"):
+                                dpg.configure_item(f"fit_plot_{fit.id}", x=x, y=y)
+                                dpg.bind_item_theme(f"fit_plot_{fit.id}", plot_theme)
+                            else:
+                                x_bounds = (
+                                    f"{fit.x_bounds[0]:.0f}..{fit.x_bounds[1]:.0f}"
+                                )
+                                dpg.add_line_series(
+                                    x,
+                                    y,
+                                    parent="libs_y_axis",
+                                    label=f"{series.name} fit {x_bounds}",
+                                    tag=f"fit_plot_{fit.id}",
+                                )
+                                dpg.bind_item_theme(f"fit_plot_{fit.id}", plot_theme)
+                        else:
+                            if dpg.does_item_exist(f"fit_plot_{fit.id}"):
+                                dpg.delete_item(f"fit_plot_{fit.id}")
+                else:
+                    for fit_i, fit in fits.items():
+                        if dpg.does_item_exist(f"fit_plot_{fit.id}"):
+                            dpg.delete_item(f"fit_plot_{fit.id}")
+
+    def fits_lmb_callback(self, sender, data):
+        wrapper_id: int = data[1]
+        user_data = dpg.get_item_user_data(wrapper_id)
+        if user_data is None:
+            return
+
+        series = self.project.series[user_data["series"]]
+        fit = series.fits[user_data["fit"]]
+
+        fit.selected = not fit.selected
+
+        self.refresh_fit_results()
+        self.show_fit_plots()
+
+    def fits_rmb_callback(self, sender, data):
+        wrapper_id: int = data[1]
+        user_data = dpg.get_item_user_data(wrapper_id)
+        if user_data is None:
+            return
+
+        series = self.project.series[user_data["series"]]
+        fit = series.fits[user_data["fit"]]
+
+        if not dpg.does_item_exist(f"{fit.id}_rmb_window"):
+            with dpg.window(
+                no_title_bar=True,
+                no_move=True,
+                no_open_over_existing_popup=True,
+                popup=True,
+                tag=f"{fit.id}_rmb_window",
+            ):
+                with dpg.group(horizontal=True):
+                    dpg.add_button(label="I", tag=f"{fit.id}_save_plot_png")
+                    with dpg.tooltip(dpg.last_item()):
+                        dpg.add_text("Save as .png image")
+
+                    dpg.add_button(label="E", tag=f"{fit.id}_export_spectrum_csv")
+                    with dpg.tooltip(dpg.last_item()):
+                        dpg.add_text("Export fit")
+        else:
+            dpg.show_item(f"{fit.id}_rmb_window")
+
+    def show_all_plots(self):
+        self.show_libs_plots()
+        self.show_fit_plots()
