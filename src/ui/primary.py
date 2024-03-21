@@ -280,6 +280,8 @@ class UI:
             self.settings_window.toggle()
         if dpg.is_key_pressed(dpg.mvKey_B):
             self.toggle_sidebar()
+        if dpg.is_key_pressed(dpg.mvKey_N):
+            self.toggle_sidebar_right()
 
         if dpg.is_key_down(dpg.mvKey_Alt):
             if dpg.is_key_down(dpg.mvKey_Shift):
@@ -369,42 +371,50 @@ class UI:
                     if group_children is None:
                         return
 
-                    with dpg.window(
-                        pos=dpg.get_mouse_pos(),
-                        no_title_bar=True,
-                        no_move=True,
-                        no_open_over_existing_popup=True,
-                        popup=True,
-                        menubar=True,
-                    ):
-                        with dpg.menu_bar():
-                            dpg.add_menu(label=f"{series.name} info", enabled=False)
+                    if not dpg.does_item_exist(f"{series.id}_rmb_window"):
+                        with dpg.window(
+                            pos=dpg.get_mouse_pos(),
+                            no_title_bar=True,
+                            no_move=True,
+                            no_open_over_existing_popup=True,
+                            popup=True,
+                            menubar=True,
+                            tag=f"{series.id}_rmb_window",
+                        ):
+                            with dpg.menu_bar():
+                                dpg.add_menu(label=f"{series.name} info", enabled=False)
 
-                        dpg.add_text(f"Directory: {series.directory}")
-                        dpg.add_text(
-                            f"{series.samples_total} samples with {series.spectra_total} spectra total"
-                        )
+                            dpg.add_text(f"Directory: {series.directory}")
+                            dpg.add_text(
+                                f"{series.samples_total} samples with {series.spectra_total} spectra total"
+                            )
 
-                        dpg.add_separator()
-                        dpg.add_text("Drop first n spectra in samples:")
-                        dpg.add_slider_int(
-                            min_value=0,
-                            default_value=series.sample_drop_first,
-                            max_value=len(series.samples[0].spectra) - 1,
-                            clamped=True,
-                            callback=lambda s, d: self.set_series_drop_first_n(
-                                series, d
-                            ),
-                        )
+                            dpg.add_separator()
+                            dpg.add_text("Drop first n spectra in samples:")
+                            dpg.add_slider_int(
+                                min_value=0,
+                                default_value=series.sample_drop_first,
+                                max_value=len(series.samples[0].spectra) - 1,
+                                clamped=True,
+                                callback=lambda s, d: self.set_series_drop_first_n(
+                                    series, d
+                                ),
+                            )
 
-                        with dpg.group(horizontal=True):
-                            dpg.add_button(label="I", tag=f"{series.id}_save_plot_png")
-                            with dpg.tooltip(dpg.last_item()):
-                                dpg.add_text("Save as .png image")
+                            with dpg.group(horizontal=True):
+                                dpg.add_button(
+                                    label="I", tag=f"{series.id}_save_plot_png"
+                                )
+                                with dpg.tooltip(dpg.last_item()):
+                                    dpg.add_text("Save as .png image")
 
-                            dpg.add_button(label="E", tag=f"{series.id}_export_spectrum_csv")
-                            with dpg.tooltip(dpg.last_item()):
-                                dpg.add_text("Export averaged spectrum")
+                                dpg.add_button(
+                                    label="E", tag=f"{series.id}_export_spectrum_csv"
+                                )
+                                with dpg.tooltip(dpg.last_item()):
+                                    dpg.add_text("Export averaged spectrum")
+                    else:
+                        dpg.show_item(f"{series.id}_rmb_window")
 
     def set_series_drop_first_n(self, series: Series, drop_first_n: int):
         with dpg.mutex():
@@ -683,6 +693,10 @@ class UI:
             dpg.configure_item("loading_indicator", pos=(w // 2 - 100, h // 2 - 100))
 
         dpg.configure_item("settings_window", pos=[w // 2 - 350, h // 2 - 200])
+        if dpg.is_item_shown("sidebar_right"):
+            dpg.configure_item("data", width=(w - 700))
+        else:
+            dpg.configure_item("data", width=-1)
 
     def toggle_fitting_windows(self):
         state = self.settings.fitting_windows_shown.value
@@ -960,6 +974,12 @@ class UI:
                         label="Toggle Sidebar",
                         shortcut="(Ctrl+B)",
                         callback=lambda _s, _d: self.toggle_sidebar(),
+                    )
+
+                    dpg.add_menu_item(
+                        label="Toggle Right Sidebar",
+                        shortcut="(Ctrl+N)",
+                        callback=lambda _s, _d: self.toggle_sidebar_right(),
                     )
                 with dpg.menu(label="Tools"):
                     with dpg.menu(label="Developer"):
@@ -1272,7 +1292,8 @@ class UI:
                                     **self.settings.fitting_max_iterations.as_dict,
                                 )
 
-                with dpg.child_window(border=False, width=-1, tag="data"):
+                w = dpg.get_viewport_width()
+                with dpg.child_window(border=False, width=(w - 700), tag="data"):
                     with dpg.group(horizontal=True):
                         with dpg.plot(
                             tag="libs_plots",
@@ -1297,6 +1318,22 @@ class UI:
                                 tag="libs_y_axis",
                             )
 
+                with dpg.child_window(border=False, width=-1, tag="sidebar_right"):
+                    with dpg.collapsing_header(label="Fitting", default_open=True):
+                        with dpg.child_window(
+                            width=-1,
+                            height=500,
+                            no_scrollbar=True,
+                        ):
+                            dpg.add_text("test")
+                    with dpg.collapsing_header(label="Stuff", default_open=True):
+                        with dpg.child_window(
+                            width=-1,
+                            height=-1,
+                            no_scrollbar=True,
+                        ):
+                            dpg.add_text("test")
+
         with dpg.file_dialog(
             modal=True,
             show=False,
@@ -1313,3 +1350,11 @@ class UI:
             dpg.show_item("sidebar")
         else:
             dpg.hide_item("sidebar")
+
+    def toggle_sidebar_right(self):
+        if not dpg.is_item_shown("sidebar_right"):
+            dpg.show_item("sidebar_right")
+        else:
+            dpg.hide_item("sidebar_right")
+
+        self.window_resize_callback()
