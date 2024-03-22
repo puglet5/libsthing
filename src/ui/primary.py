@@ -1712,7 +1712,7 @@ class UI:
                                         x,
                                         y,
                                         parent="libs_y_axis",
-                                        label=f"{series.name} fit {x_bounds}",
+                                        label=f"{series.name} fit {x_bounds} peak {peak_i}",
                                         tag=f"fit_plot_{peak_id}",
                                         user_data={"fit": peak_id},
                                     )
