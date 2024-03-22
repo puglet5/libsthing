@@ -204,6 +204,11 @@ class UI:
                 2000,
                 None,
             ),
+            fitting_fit_display_mode=Setting(
+                "settings_fitting_fit_display_mode",
+                "Sum",
+                self.show_fit_plots,
+            ),
         )
 
     def reset_settings(self):
@@ -1375,9 +1380,9 @@ class UI:
                                             "Fit display mode".rjust(LABEL_PAD)
                                         )
                                         dpg.add_combo(
-                                            items=["Sum", "Components", "Both", "None"],
-                                            default_value="Sum",
+                                            items=["Sum", "Components", "Both"],
                                             width=-1,
+                                            **self.settings.fitting_fit_display_mode.as_dict,
                                         )
                                     with dpg.group(horizontal=True):
                                         dpg.add_text("Fit info".rjust(LABEL_PAD))
@@ -1549,7 +1554,7 @@ class UI:
 
         self.peak_table.populate_table_fitted()
 
-    def show_fit_plots(self):
+    def show_fit_plots_sum(self):
         with dpg.mutex():
             for s_id, series in self.project.series.items():
                 fits = series.fits
@@ -1652,6 +1657,141 @@ class UI:
                     if dpg.does_item_exist(f"fit_plot_area_{fit_id}"):
                         dpg.delete_item(f"fit_plot_area_{fit_id}")
 
+    def show_fit_plots_components(self):
+        with dpg.mutex():
+            for s_id, series in self.project.series.items():
+                fits = series.fits
+                assert series.color
+
+                if series.selected:
+                    for fit_i, (fit_id, fit) in enumerate(fits.items()):
+                        if fit.selected:
+                            for peak_i, (peak_id, peak) in enumerate(
+                                fit.components.items()
+                            ):
+                                x, y = peak.fitted.xy.tolist()
+                                x_area, y_area = peak.fitted.area_fill_xy.tolist()
+
+                                fit_line_color = np.array(
+                                    dpg.sample_colormap(
+                                        dpg.mvPlotColormap_Viridis,
+                                        peak_i / len(fit.components),
+                                    )
+                                ) * [255, 255, 255, 255]
+                                fit_line_color[-1] = 255
+
+                                fit_fill_color = fit_line_color
+
+                                fit_fill_color[-1] = 100
+
+                                with dpg.theme() as plot_theme:
+                                    with dpg.theme_component(dpg.mvLineSeries):
+                                        dpg.add_theme_color(
+                                            dpg.mvPlotCol_Line,
+                                            fit_line_color.tolist(),
+                                            category=dpg.mvThemeCat_Plots,
+                                        )
+                                with dpg.theme() as area_theme:
+                                    with dpg.theme_component(dpg.mvAreaSeries):
+                                        dpg.add_theme_color(
+                                            dpg.mvPlotCol_Line,
+                                            (255, 255, 255, 0),
+                                            category=dpg.mvThemeCat_Plots,
+                                        )
+
+                                if dpg.does_item_exist(f"fit_plot_{peak_id}"):
+                                    dpg.configure_item(f"fit_plot_{peak_id}", x=x, y=y)
+                                    dpg.bind_item_theme(
+                                        f"fit_plot_{peak_id}", plot_theme
+                                    )
+                                else:
+                                    x_bounds = (
+                                        f"{fit.x_bounds[0]:.0f}..{fit.x_bounds[1]:.0f}"
+                                    )
+                                    dpg.add_line_series(
+                                        x,
+                                        y,
+                                        parent="libs_y_axis",
+                                        label=f"{series.name} fit {x_bounds}",
+                                        tag=f"fit_plot_{peak_id}",
+                                        user_data={"fit": peak_id},
+                                    )
+                                    dpg.add_area_series(
+                                        x_area,
+                                        y_area,
+                                        parent="libs_y_axis",
+                                        fill=fit_fill_color.tolist(),
+                                        tag=f"fit_plot_area_{peak_id}",
+                                        user_data={"fit": peak_id},
+                                    )
+                                    dpg.bind_item_theme(
+                                        f"fit_plot_{peak_id}", plot_theme
+                                    )
+                                    dpg.bind_item_theme(
+                                        f"fit_plot_area_{peak_id}", area_theme
+                                    )
+
+        # cleanup
+        for s_id, series in self.project.series.items():
+            fits = series.fits
+            if not series.selected:
+                for fit_id, fit in fits.items():
+                    if dpg.does_item_exist(f"fit_plot_{fit_id}"):
+                        dpg.delete_item(f"fit_plot_{fit_id}")
+                    if dpg.does_item_exist(f"fit_plot_area_{fit_id}"):
+                        dpg.delete_item(f"fit_plot_area_{fit_id}")
+                    for peak_id, peak in fit.components.items():
+                        if dpg.does_item_exist(f"fit_plot_{peak_id}"):
+                            dpg.delete_item(f"fit_plot_{peak_id}")
+                        if dpg.does_item_exist(f"fit_plot_area_{peak_id}"):
+                            dpg.delete_item(f"fit_plot_area_{peak_id}")
+            else:
+                for fit_id, fit in fits.items():
+                    if dpg.does_item_exist(f"fit_plot_{fit_id}"):
+                        dpg.delete_item(f"fit_plot_{fit_id}")
+                    if dpg.does_item_exist(f"fit_plot_area_{fit_id}"):
+                        dpg.delete_item(f"fit_plot_area_{fit_id}")
+                    if not fit.selected:
+                        for peak_id, peak in fit.components.items():
+                            if dpg.does_item_exist(f"fit_plot_{peak_id}"):
+                                dpg.delete_item(f"fit_plot_{peak_id}")
+                            if dpg.does_item_exist(f"fit_plot_area_{peak_id}"):
+                                dpg.delete_item(f"fit_plot_area_{peak_id}")
+
+        peak_ids = []
+        for series in self.project.series.values():
+            for fit in series.fits.values():
+                for peak_id, peak in fit.components.items():
+                    peak_ids.append(peak_id)
+
+        y_axis_children = dpg.get_item_children("libs_y_axis", slot=1)
+        if y_axis_children is None:
+            return
+        assert isinstance(y_axis_children, list)
+
+        for plot in y_axis_children:
+            if not dpg.does_item_exist(plot):
+                continue
+            plot_user_data = dpg.get_item_user_data(plot)
+            if plot_user_data is None:
+                continue
+
+            peak_id = plot_user_data.get("fit", None)
+            if peak_id is None:
+                continue
+
+            if peak_id not in peak_ids:
+                if dpg.does_item_exist(f"fit_plot_{peak_id}"):
+                    dpg.delete_item(f"fit_plot_{peak_id}")
+                if dpg.does_item_exist(f"fit_plot_area_{peak_id}"):
+                    dpg.delete_item(f"fit_plot_area_{peak_id}")
+
+    def show_fit_plots(self):
+        if self.settings.fitting_fit_display_mode.value == "Sum":
+            self.show_fit_plots_sum()
+        elif self.settings.fitting_fit_display_mode.value == "Components":
+            self.show_fit_plots_components()
+
     def fits_lmb_callback(self, sender, data):
         wrapper_id: int = data[1]
         user_data = dpg.get_item_user_data(wrapper_id)
@@ -1739,5 +1879,7 @@ class UI:
         self.show_fit_plots()
 
     def show_all_plots(self):
+        self.show_libs_plots()
+        self.show_fit_plots()
         self.show_libs_plots()
         self.show_fit_plots()

@@ -81,6 +81,7 @@ class Settings:
     fitting_y_threshold: Setting[float]
     fitting_y_threshold_type: Setting[Literal["Absolute", "Relative"]]
     fitting_max_iterations: Setting[Literal[-1] | int]
+    fitting_fit_display_mode: Setting[Literal["Sum", "Components", "Both"]]
 
     def __iter__(self) -> Generator[Setting, None, None]:
         return (getattr(self, field.name) for field in fields(Settings))
