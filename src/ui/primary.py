@@ -19,6 +19,7 @@ from src.utils import (
     Project,
     Series,
     Window,
+    flatten,
 )
 from ui.loading_indicator import LoadingIndicator
 from ui.peak_table import PeakTable
@@ -200,7 +201,7 @@ class UI:
             ),
             fitting_max_iterations=Setting(
                 "settings_fitting_max_iterations",
-                -1,
+                2000,
                 None,
             ),
         )
@@ -819,7 +820,7 @@ class UI:
                             callback=lambda s, d: self.lock_drag_item(s, d),
                         )
 
-        self.refresh_peak_table()
+            self.refresh_peak_table()
 
     def lock_drag_item(self, sender: DPGItem, data):
         dpg.set_value(sender, (dpg.get_item_user_data(sender)))
@@ -833,8 +834,6 @@ class UI:
         if self.settings.peaks_shown.value:
             self.settings.peaks_shown.set(False)
             self.settings.peaks_shown.set(True)
-
-        self.refresh_peak_table()
 
     def change_fitting_windows_threshold_type(self):
         threshold_type = self.settings.fitting_y_threshold_type.value
@@ -860,9 +859,8 @@ class UI:
     def refresh_peak_table(self):
         if not self.project.selected_series:
             return
-        series = self.project.selected_series[0]
-        self.peak_table.series = series
-        self.peak_table.peaks = series.averaged.peaks
+        self.peak_table.series = self.project.selected_series
+        self.peak_table.populate_table_regular()
 
     def handle_region_guide(self, guide, start_or_end: Literal[0, 1]):
         start_value = dpg.get_value("region_guide_start")
@@ -990,6 +988,13 @@ class UI:
                         label="Toggle Fullscreen",
                         shortcut="(F11)",
                         callback=lambda _s, _d: dpg.toggle_viewport_fullscreen(),
+                    )
+                    dpg.add_menu_item(
+                        label="Docking",
+                        check=True,
+                        callback=lambda _s, d: dpg.configure_app(
+                            docking=d, docking_space=False
+                        ),
                     )
                     dpg.add_menu_item(
                         label="Toggle Sidebar",
@@ -1403,6 +1408,9 @@ class UI:
                                             default_value="Series",
                                             width=-1,
                                         )
+                                    with dpg.group(horizontal=True):
+                                        dpg.add_text("Fill fit curve".rjust(LABEL_PAD))
+                                        dpg.add_checkbox(default_value=True)
 
                                 with dpg.child_window(
                                     width=-1,
@@ -1539,6 +1547,8 @@ class UI:
                             f"{fit_id}_thumbnail_plot_wrapper", "fit_lmb_handler"
                         )
 
+        self.peak_table.populate_table_fitted()
+
     def show_fit_plots(self):
         with dpg.mutex():
             for s_id, series in self.project.series.items():
@@ -1549,17 +1559,31 @@ class UI:
                     for fit_i, fit in fits.items():
                         if fit.selected:
                             x, y = fit.data.xy.tolist()
+                            x_area, y_area = fit.data.area_fill_xy.tolist()
 
                             fit_line_color = [255, 255, 255, 255] - np.array(
                                 series.color
                             )
                             fit_line_color[-1] = 255
 
+                            fit_fill_color = [255, 255, 255, 255] - np.array(
+                                series.color
+                            )
+
+                            fit_fill_color[-1] = 100
+
                             with dpg.theme() as plot_theme:
                                 with dpg.theme_component(dpg.mvLineSeries):
                                     dpg.add_theme_color(
                                         dpg.mvPlotCol_Line,
                                         fit_line_color.tolist(),
+                                        category=dpg.mvThemeCat_Plots,
+                                    )
+                            with dpg.theme() as area_theme:
+                                with dpg.theme_component(dpg.mvAreaSeries):
+                                    dpg.add_theme_color(
+                                        dpg.mvPlotCol_Line,
+                                        (255, 255, 255, 0),
                                         category=dpg.mvThemeCat_Plots,
                                     )
 
@@ -1576,15 +1600,57 @@ class UI:
                                     parent="libs_y_axis",
                                     label=f"{series.name} fit {x_bounds}",
                                     tag=f"fit_plot_{fit.id}",
+                                    user_data={"fit": fit.id},
+                                )
+                                dpg.add_area_series(
+                                    x_area,
+                                    y_area,
+                                    parent="libs_y_axis",
+                                    fill=fit_fill_color.tolist(),
+                                    tag=f"fit_plot_area_{fit.id}",
+                                    user_data={"fit": fit.id},
                                 )
                                 dpg.bind_item_theme(f"fit_plot_{fit.id}", plot_theme)
+                                dpg.bind_item_theme(
+                                    f"fit_plot_area_{fit.id}", area_theme
+                                )
                         else:
                             if dpg.does_item_exist(f"fit_plot_{fit.id}"):
                                 dpg.delete_item(f"fit_plot_{fit.id}")
+                            if dpg.does_item_exist(f"fit_plot_area_{fit.id}"):
+                                dpg.delete_item(f"fit_plot_area_{fit.id}")
                 else:
                     for fit_i, fit in fits.items():
                         if dpg.does_item_exist(f"fit_plot_{fit.id}"):
                             dpg.delete_item(f"fit_plot_{fit.id}")
+                        if dpg.does_item_exist(f"fit_plot_area_{fit.id}"):
+                            dpg.delete_item(f"fit_plot_area_{fit.id}")
+
+            # check for stale plots
+            all_fit_ids = flatten(
+                [list(s.fits.keys()) for s in self.project.series.values()]
+            )
+            y_axis_children = dpg.get_item_children("libs_y_axis", slot=1)
+            if y_axis_children is None:
+                return
+            assert isinstance(y_axis_children, list)
+
+            for plot in y_axis_children:
+                if not dpg.does_item_exist(plot):
+                    continue
+                plot_user_data = dpg.get_item_user_data(plot)
+                if plot_user_data is None:
+                    continue
+
+                fit_id = plot_user_data.get("fit", None)
+                if fit_id is None:
+                    continue
+
+                if fit_id not in all_fit_ids:
+                    if dpg.does_item_exist(f"fit_plot_{fit_id}"):
+                        dpg.delete_item(f"fit_plot_{fit_id}")
+                    if dpg.does_item_exist(f"fit_plot_area_{fit_id}"):
+                        dpg.delete_item(f"fit_plot_area_{fit_id}")
 
     def fits_lmb_callback(self, sender, data):
         wrapper_id: int = data[1]
@@ -1615,18 +1681,62 @@ class UI:
                 no_move=True,
                 no_open_over_existing_popup=True,
                 popup=True,
+                menubar=True,
                 tag=f"{fit.id}_rmb_window",
             ):
-                with dpg.group(horizontal=True):
-                    dpg.add_button(label="I", tag=f"{fit.id}_save_plot_png")
-                    with dpg.tooltip(dpg.last_item()):
-                        dpg.add_text("Save as .png image")
+                with dpg.menu_bar():
+                    dpg.add_menu(
+                        label=f"{series.name} fit {fit.printable_x_bounds} info",
+                        enabled=False,
+                    )
+                with dpg.table(
+                    borders_innerH=True,
+                    borders_innerV=True,
+                    borders_outerH=True,
+                    borders_outerV=True,
+                    freeze_rows=1,
+                    policy=dpg.mvTable_SizingFixedFit,
+                    width=-1,
+                ):
+                    dpg.add_table_column(label="Parameter")
+                    dpg.add_table_column(label="Value")
+                    if fit.windows_total > 1:
+                        with dpg.table_row():
+                            dpg.add_text("Mean R²")
+                            dpg.add_text(f"{fit.r_squared_mean:.4f}")
+                        with dpg.table_row():
+                            dpg.add_text("Min R²")
+                            dpg.add_text(f"{fit.r_squared_min:.4f}")
+                        with dpg.table_row():
+                            dpg.add_text("R² std. dev.")
+                            dpg.add_text(f"{fit.r_squared_st_dev:.4f}")
+                        with dpg.table_row():
+                            dpg.add_text("Windows")
+                            dpg.add_text(f"{fit.windows_total}")
+                        with dpg.table_row():
+                            dpg.add_text("Peaks")
+                            dpg.add_text(f"{fit.n_peaks}")
+                    else:
+                        with dpg.table_row():
+                            dpg.add_text("R²")
+                            dpg.add_text(f"{fit.r_squared_mean:.4f}")
+                        with dpg.table_row():
+                            dpg.add_text("Peaks")
+                            dpg.add_text(f"{fit.n_peaks}")
 
-                    dpg.add_button(label="E", tag=f"{fit.id}_export_spectrum_csv")
-                    with dpg.tooltip(dpg.last_item()):
-                        dpg.add_text("Export fit")
+                dpg.add_button(
+                    label="Delete fit",
+                    width=-1,
+                    callback=lambda s, d: self.delete_fit(series, fit.id),
+                )
         else:
             dpg.show_item(f"{fit.id}_rmb_window")
+
+    def delete_fit(self, series: Series, fit_id: str):
+        dpg.delete_item(f"{fit_id}_rmb_window")
+        del series.fits[fit_id]
+        self.refresh_fit_results()
+        self.show_fit_plots()
 
     def show_all_plots(self):
         self.show_libs_plots()

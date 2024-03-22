@@ -262,6 +262,23 @@ class Spectrum:
         return self.processed_spectral_data.T
 
     @property
+    def area_fill_xy(self):
+        if self.processed_spectral_data is None:
+            raise ValueError
+
+        area_coords = np.append(
+            self.processed_spectral_data,
+            [
+                [self.processed_spectral_data[-1][0], 0],
+                [self.processed_spectral_data[0][0], 0],
+                self.processed_spectral_data[0],
+            ],
+            axis=0,
+        )
+
+        return area_coords.T
+
+    @property
     def x_limits(self) -> Window:
         return (self.x.min(), self.x.max())
 
@@ -470,6 +487,7 @@ class Spectrum:
             params.add(
                 f"{peak.prefix}sigma", min=0.1, max=2, value=peak.sigma_estimated
             )
+            params.add(f"{peak.prefix}fwhm", value=peak.fwhm_estimated)
             params.add(f"{peak.prefix}amplitude", min=0, value=peak.amplitude_estimated)
             params.add(f"{peak.prefix}fraction", min=0, max=1, value=0.5)
             params.add(
@@ -497,6 +515,7 @@ class Spectrum:
             peak.amplitude_fitted = parameters[f"peak_{peak.id}amplitude"].value
             peak.fraction_fitted = parameters[f"peak_{peak.id}fraction"].value
             peak.center_fitted = parameters[f"peak_{peak.id}center"].value
+            peak.fwhm_fitted = parameters[f"peak_{peak.id}fwhm"].value
 
         fit_result: FitResult = {"model_result": result, "peaks": peaks}
 
@@ -791,7 +810,6 @@ class Fit:
     r_squared_min: np.float_ = field(init=False)
     r_squared_st_dev: np.float_ = field(init=False)
     windows: Windows
-    windows_total: int = field(init=False, default=1)
     fit_results: list[FitResult]
     components: Mapping[str, Peak]
     selected: bool = field(init=False, default=True)
@@ -842,6 +860,18 @@ class Fit:
             windows=windows,
             components=components,
         )
+
+    @property
+    def printable_x_bounds(self):
+        return f"{self.x_bounds[0]:.0f}..{self.x_bounds[1]:.0f}"
+
+    @property
+    def n_peaks(self):
+        return len(self.components)
+
+    @property
+    def windows_total(self):
+        return len(self.windows)
 
 
 @define(repr=False)
