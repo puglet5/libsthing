@@ -28,6 +28,7 @@ import coloredlogs
 import dearpygui.dearpygui as dpg
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 import pyarrow as pa
 from attr import define, field
 from lmfit import Model, Parameters
@@ -980,3 +981,7 @@ class Project:
             finally:
                 pool.close()
                 pool.join()
+
+
+def element_plot_data(element_data: pd.DataFrame):
+    ...

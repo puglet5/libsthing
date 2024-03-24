@@ -265,6 +265,15 @@ def element_z_to_name(z) -> str | None:
     return ELEMENT_NAMES[z - 1]
 
 
+def element_symbol_to_z(symbol: str):
+    try:
+        z = ELEMENT_SYMBOLS.index(symbol)
+    except ValueError:
+        return None
+
+    return z + 1
+
+
 @define
 class PeriodicTable:
     elements_z_selected: set[int] = field(init=False, factory=set)
