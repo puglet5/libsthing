@@ -541,6 +541,7 @@ class UI:
             self.settings.normalized_from.value,
             self.settings.normalized_to.value,
         )
+        shift: float = dpg.get_value("libs_x_shift")
 
         with dpg.mutex():
             for i, series in enumerate(self.project.selected_series):
@@ -548,7 +549,8 @@ class UI:
                 assert spectrum.raw_spectral_data is not None
                 assert series.color
                 spectrum.process_spectral_data(
-                    normalized,
+                    normalized=normalized,
+                    shift=shift,
                     normalization_range=normalization_range,
                     baseline_removal=baseline_removal,
                     baseline_clip=self.settings.baseline_clipped_to_zero.value,
@@ -1116,9 +1118,20 @@ class UI:
                     with dpg.collapsing_header(label="Plots", default_open=True):
                         with dpg.child_window(
                             width=-1,
-                            height=300,
+                            height=350,
                             no_scrollbar=True,
                         ):
+                            with dpg.group(horizontal=True):
+                                dpg.add_text("Shift".rjust(LABEL_PAD))
+                                dpg.add_slider_float(
+                                    min_value=-2,
+                                    max_value=2,
+                                    clamped=True,
+                                    width=-1,
+                                    default_value=0.0,
+                                    callback=self.show_libs_plots,
+                                    tag="libs_x_shift",
+                                )
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Normalize".rjust(LABEL_PAD))
                                 dpg.add_checkbox(

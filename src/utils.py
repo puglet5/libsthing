@@ -244,7 +244,10 @@ class Spectrum:
     def x(self):
         if self.raw_spectral_data is None:
             raise ValueError
-        return self.raw_spectral_data[:, 0]
+        if self.processed_spectral_data is None:
+            return self.raw_spectral_data[:, 0]
+
+        return self.processed_spectral_data[:, 0]
 
     @property
     def y(self):
@@ -305,6 +308,7 @@ class Spectrum:
 
     def process_spectral_data(
         self,
+        shift: float,
         normalized=False,
         normalization_range: Window = (1, -1),
         baseline_clip=True,
@@ -329,6 +333,10 @@ class Spectrum:
             else:
                 y = y - bkg
 
+        x = self.raw_spectral_data[:,0]
+        if shift != 0:
+            x = x + shift
+
         if normalized:
             norm_min = max(normalization_range[0], self.x.min())
             if normalization_range[1] == -1:
@@ -345,7 +353,7 @@ class Spectrum:
             else:
                 y = y / y[np.logical_and(self.x > norm_min, self.x < norm_max)].max()
 
-        self.processed_spectral_data = np.array([self.x, y]).T
+        self.processed_spectral_data = np.array([x, y]).T
 
     def find_peaks(
         self,
