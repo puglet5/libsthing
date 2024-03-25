@@ -321,7 +321,7 @@ class Spectrum:
         if baseline_params is None:
             baseline_params = {}
 
-        y = data.T[1]
+        x, y = data.T
 
         if baseline_removal != BaselineRemoval.NONE:
             bkg = self.baseline(
@@ -333,7 +333,6 @@ class Spectrum:
             else:
                 y = y - bkg
 
-        x = self.raw_spectral_data[:,0]
         if shift != 0:
             x = x + shift
 
