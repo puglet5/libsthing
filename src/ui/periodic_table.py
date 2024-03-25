@@ -807,91 +807,106 @@ class PeriodicTable:
                         label="Rf",
                         width=20,
                         user_data=104,
+                        enabled=False,
                         callback=lambda s, d: self.element_selected(s, d),
                     )
                     dpg.add_selectable(
                         label="Db",
                         width=20,
                         user_data=105,
+                        enabled=False,
                         callback=lambda s, d: self.element_selected(s, d),
                     )
                     dpg.add_selectable(
                         label="Sg",
                         width=20,
                         user_data=106,
+                        enabled=False,
                         callback=lambda s, d: self.element_selected(s, d),
                     )
                     dpg.add_selectable(
                         label="Bh",
                         width=20,
                         user_data=107,
+                        enabled=False,
                         callback=lambda s, d: self.element_selected(s, d),
                     )
                     dpg.add_selectable(
                         label="Hs",
                         width=20,
                         user_data=108,
+                        enabled=False,
                         callback=lambda s, d: self.element_selected(s, d),
                     )
                     dpg.add_selectable(
                         label="Mt",
                         width=20,
                         user_data=109,
+                        enabled=False,
                         callback=lambda s, d: self.element_selected(s, d),
                     )
                     dpg.add_selectable(
                         label="Ds",
                         width=20,
                         user_data=110,
+                        enabled=False,
                         callback=lambda s, d: self.element_selected(s, d),
                     )
                     dpg.add_selectable(
                         label="Rg",
                         width=20,
                         user_data=111,
-                        callback=lambda s, d: self.element_selected(s, d),
+                        enabled=False,
+                        callback= lambda s, d: self.element_selected(s, d),
                     )
                     dpg.add_selectable(
                         label="Cn",
                         width=20,
                         user_data=112,
-                        callback=lambda s, d: self.element_selected(s, d),
+                        enabled=False,
+                        callback= lambda s, d: self.element_selected(s, d),
                     )
                     dpg.add_selectable(
                         label="Nh",
                         width=20,
                         user_data=113,
-                        callback=lambda s, d: self.element_selected(s, d),
+                        enabled=False,
+                        callback= lambda s, d: self.element_selected(s, d),
                     )
                     dpg.add_selectable(
                         label="Fl",
                         width=20,
                         user_data=114,
-                        callback=lambda s, d: self.element_selected(s, d),
+                        enabled=False,
+                        callback= lambda s, d: self.element_selected(s, d),
                     )
                     dpg.add_selectable(
                         label="Mc",
                         width=20,
                         user_data=115,
-                        callback=lambda s, d: self.element_selected(s, d),
+                        enabled=False,
+                        callback= lambda s, d: self.element_selected(s, d),
                     )
                     dpg.add_selectable(
                         label="Lv",
                         width=20,
                         user_data=116,
-                        callback=lambda s, d: self.element_selected(s, d),
+                        enabled=False,
+                        callback= lambda s, d: self.element_selected(s, d),
                     )
                     dpg.add_selectable(
                         label="Ts",
                         width=20,
                         user_data=117,
-                        callback=lambda s, d: self.element_selected(s, d),
+                        enabled=False,
+                        callback= lambda s, d: self.element_selected(s, d),
                     )
                     dpg.add_selectable(
                         label="Og",
                         width=20,
                         user_data=118,
-                        callback=lambda s, d: self.element_selected(s, d),
+                        enabled=False,
+                        callback= lambda s, d: self.element_selected(s, d),
                     )
 
                 with dpg.table_row(label="row_separator"):
@@ -1059,22 +1074,26 @@ class PeriodicTable:
                         label="Fm",
                         width=20,
                         user_data=100,
+                        enabled=False,
                         callback=lambda s, d: self.element_selected(s, d),
                     )
                     dpg.add_selectable(
                         label="Md",
                         width=20,
+                        enabled=False,
                         user_data=101,
                         callback=lambda s, d: self.element_selected(s, d),
                     )
                     dpg.add_selectable(
                         label="No",
                         width=20,
+                        enabled=False,
                         user_data=102,
                         callback=lambda s, d: self.element_selected(s, d),
                     )
                     dpg.add_selectable(
                         label="Lr",
+                        enabled=False,
                         width=20,
                         user_data=103,
                         callback=lambda s, d: self.element_selected(s, d),

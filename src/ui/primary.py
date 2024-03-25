@@ -1652,7 +1652,7 @@ class UI:
                 if not dpg.does_item_exist(plot):
                     continue
                 plot_user_data = dpg.get_item_user_data(plot)
-                if plot_user_data is None:
+                if not isinstance(plot_user_data, dict):
                     continue
 
                 fit_id = plot_user_data.get("fit", None)
