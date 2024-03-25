@@ -274,8 +274,9 @@ def element_symbol_to_z(symbol: str):
     return z + 1
 
 
-@define
+@define(slots=False)
 class PeriodicTable:
+    ui_parent: "UI" = field(init=False)  # type:ignore
     elements_z_selected: set[int] = field(init=False, factory=set)
 
     def __attrs_post_init__(self):
@@ -1090,6 +1091,12 @@ class PeriodicTable:
             self.elements_z_selected.add(element_number)
         else:
             self.elements_z_selected.discard(element_number)
+
+        self.ui_parent.show_emission_plots()
+
+    @property
+    def element_symbols_selected(self):
+        return {element_z_to_symbol(z) for z in self.elements_z_selected}
 
     def show(self):
         dpg.show_item("periodic_table")

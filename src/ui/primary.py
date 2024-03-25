@@ -6,10 +6,21 @@ from typing import Literal
 
 import dearpygui.dearpygui as dpg
 import numpy as np
+import pandas as pd
 from attrs import define, field
 from natsort import index_natsorted, order_by_index
 
 from settings import BaselineRemoval, Setting, Settings
+from src.static.nist_processed.line_data import (
+    element_plot_data,
+    get_emission_data,
+    select_wl_region,
+)
+from src.ui.loading_indicator import LoadingIndicator
+from src.ui.peak_table import PeakTable
+from src.ui.periodic_table import PeriodicTable
+from src.ui.settings_window import SettingsWindow
+from src.ui.simulation_window import SimulationWindow
 from src.utils import (
     LABEL_PAD,
     SIDEBAR_WIDTH,
@@ -21,11 +32,6 @@ from src.utils import (
     Window,
     flatten,
 )
-from ui.loading_indicator import LoadingIndicator
-from ui.peak_table import PeakTable
-from ui.periodic_table import PeriodicTable
-from ui.settings_window import SettingsWindow
-from ui.simulation_window import SimulationWindow
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +74,8 @@ class UI:
         self.peak_table = PeakTable()
         self.settings_window = SettingsWindow()
         self.loading_indicator = LoadingIndicator()
+
+        self.periodic_table.ui_parent = self
 
         self.setup_layout()
         self.bind_item_handlers()
@@ -1881,5 +1889,49 @@ class UI:
     def show_all_plots(self):
         self.show_libs_plots()
         self.show_fit_plots()
-        self.show_libs_plots()
-        self.show_fit_plots()
+
+    def show_emission_plots(self):
+        emission_plots = dpg.get_item_children("libs_y_axis", slot=1)
+        assert isinstance(emission_plots, list)
+
+        if emission_plots:
+            for plot in emission_plots:
+                if dpg.get_item_user_data(plot) == "emission_plot":
+                    dpg.delete_item(plot)
+
+        emission_data_wl_region = self.project.selected_series[0].averaged.x_limits
+        emission_data = [
+            (
+                symbol,
+                element_plot_data(
+                    select_wl_region(
+                        get_emission_data(symbol), *emission_data_wl_region
+                    )
+                ),
+            )
+            for symbol in self.periodic_table.element_symbols_selected
+            if symbol is not None
+        ]
+
+        with dpg.theme() as plot_theme:
+            with dpg.theme_component(dpg.mvLineSeries):
+                dpg.add_theme_style(
+                    dpg.mvPlotStyleVar_LineWeight, 1, category=dpg.mvThemeCat_Plots
+                )
+
+        for element_symbol, data in emission_data:
+            y_multiplier = np.max(
+                [np.max(s.averaged.y) for s in self.project.selected_series]
+            )
+            x, y = data.T
+            y = y / np.nanmax(y) * y_multiplier
+            y = y.tolist()
+            x = x.tolist()
+            dpg.add_line_series(
+                x,
+                y,
+                parent="libs_y_axis",
+                label=element_symbol,
+                user_data="emission_plot",
+            )
+            dpg.bind_item_theme(dpg.last_item(), plot_theme)

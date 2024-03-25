@@ -981,7 +981,3 @@ class Project:
             finally:
                 pool.close()
                 pool.join()
-
-
-def element_plot_data(element_data: pd.DataFrame):
-    ...
