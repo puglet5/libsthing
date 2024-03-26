@@ -934,7 +934,9 @@ class Project:
     series: Mapping[str, Series] = field(init=False, factory=dict)
     plotted_series_ids: set[str] = field(init=False, default=set())
     plotted_fits_ids: set[str] = field(init=False, default=set())
-    selected_region: list[float | None] = field(init=False, default=[None, None])
+    selected_region: list[float | None] | list[float] | list[None] = field(
+        init=False, default=[None, None]
+    )
     common_x: bool = field(default=False)
     sample_drop_first: int = field(default=0)
 

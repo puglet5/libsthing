@@ -263,6 +263,7 @@ class UI:
         self.settings.reset()
         self.show_libs_plots()
         self.refresh_all()
+        self.refresh_peak_table()
 
     def stop(self):
         dpg.destroy_context()
@@ -979,25 +980,27 @@ class UI:
         else:
             start, end = self.project.selected_region
 
-        dpg.add_drag_line(
-            color=[0, 255, 0, 255],
-            thickness=2,
-            default_value=start,
-            parent="libs_plots",
-            tag="region_guide_start",
-            callback=lambda s: self.handle_region_guide(s, 0),
-            label="Selection start",
-        )
+        if not dpg.does_item_exist("region_guide_start"):
+            dpg.add_drag_line(
+                color=[0, 255, 0, 255],
+                thickness=2,
+                default_value=start,
+                parent="libs_plots",
+                tag="region_guide_start",
+                callback=lambda s: self.handle_region_guide(s, 0),
+                label="Selection start",
+            )
 
-        dpg.add_drag_line(
-            color=[0, 255, 0, 255],
-            thickness=2,
-            default_value=end,
-            parent="libs_plots",
-            callback=lambda s: self.handle_region_guide(s, 1),
-            tag="region_guide_end",
-            label="Selection end",
-        )
+        if not dpg.does_item_exist("region_guide_end"):
+            dpg.add_drag_line(
+                color=[0, 255, 0, 255],
+                thickness=2,
+                default_value=end,
+                parent="libs_plots",
+                callback=lambda s: self.handle_region_guide(s, 1),
+                tag="region_guide_end",
+                label="Selection end",
+            )
 
         region = f"{(start):.2f}..{(end):.2f} nm"
 
@@ -1005,7 +1008,7 @@ class UI:
 
         self.refresh_all()
 
-    def plot_query_callback(self, sender: DPGItem, data):
+    def plot_query_callback(self, sender: DPGItem, data: tuple[float,]):
         with dpg.mutex():
             region = list(data[0:2])
             if not region == self.project.selected_region:
@@ -1547,21 +1550,25 @@ class UI:
                                         dpg.add_text("Fit info".rjust(LABEL_PAD))
                                         dpg.add_combo(
                                             items=["Minimal", "Full"],
-                                            default_value="Minimal",
                                             width=-1,
+                                            **self.settings.fitting_fit_info.as_dict,
                                         )
 
                                     with dpg.group(horizontal=True):
                                         dpg.add_text(
                                             "Auto select new fits".rjust(LABEL_PAD)
                                         )
-                                        dpg.add_checkbox(default_value=True)
+                                        dpg.add_checkbox(
+                                            **self.settings.fitting_autoselect.as_dict
+                                        )
 
                                     with dpg.group(horizontal=True):
                                         dpg.add_text(
                                             "Include in legend".rjust(LABEL_PAD)
                                         )
-                                        dpg.add_checkbox(default_value=False)
+                                        dpg.add_checkbox(
+                                            **self.settings.fitting_inclide_in_legend.as_dict
+                                        )
 
                                     with dpg.group(horizontal=True):
                                         dpg.add_text(
@@ -1569,12 +1576,14 @@ class UI:
                                         )
                                         dpg.add_combo(
                                             items=["Series", "Negative", "Custom"],
-                                            default_value="Series",
                                             width=-1,
+                                            **self.settings.fitting_default_color.as_dict,
                                         )
                                     with dpg.group(horizontal=True):
                                         dpg.add_text("Fill fit curve".rjust(LABEL_PAD))
-                                        dpg.add_checkbox(default_value=True)
+                                        dpg.add_checkbox(
+                                            **self.settings.fitting_fill.as_dict
+                                        )
 
                                 with dpg.child_window(
                                     width=-1,
