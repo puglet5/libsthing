@@ -222,6 +222,41 @@ class UI:
                 default_value=8,
                 callback=self.show_libs_plots,
             ),
+            spectra_normalization_method=Setting(
+                "settings_normalization_method",
+                default_value="Max. intensity",
+                callback=self.show_libs_plots,
+            ),
+            spectra_shift=Setting(
+                tag="settings_spectra_shift",
+                default_value=0.0,
+                callback=self.show_libs_plots,
+            ),
+            fitting_autoselect=Setting(
+                tag="settings_fitting_autoselect",
+                default_value=True,
+                callback=self.show_fit_plots,
+            ),
+            fitting_default_color=Setting(
+                tag="settings_fitting_default_color",
+                default_value="Negative",
+                callback=self.show_fit_plots,
+            ),
+            fitting_fill=Setting(
+                tag="settings_fitting_fill",
+                default_value=True,
+                callback=self.show_fit_plots,
+            ),
+            fitting_fit_info=Setting(
+                tag="settings_fitting_fit_info",
+                default_value="Minimal",
+                callback=self.show_fit_plots,
+            ),
+            fitting_inclide_in_legend=Setting(
+                tag="settings_fitting_inclide_in_legend",
+                default_value=True,
+                callback=self.show_fit_plots,
+            ),
         )
 
     def reset_settings(self):
@@ -546,7 +581,6 @@ class UI:
             self.settings.normalized_from.value,
             self.settings.normalized_to.value,
         )
-        shift: float = dpg.get_value("libs_x_shift")
 
         baseline_params = {}
         if self.settings.baseline_removal_method.value == BaselineRemoval.NONE:
@@ -570,7 +604,7 @@ class UI:
                 assert series.color
                 spectrum.process_spectral_data(
                     normalized=normalized,
-                    shift=shift,
+                    shift=self.settings.spectra_shift.value,
                     normalization_range=normalization_range,
                     baseline_removal=baseline_removal,
                     baseline_clip=self.settings.baseline_clipped_to_zero.value,
@@ -1144,15 +1178,27 @@ class UI:
                                     min_value=-2,
                                     max_value=2,
                                     clamped=True,
-                                    width=-1,
-                                    default_value=0.0,
-                                    callback=self.show_libs_plots,
-                                    tag="libs_x_shift",
+                                    width=-30,
+                                    **self.settings.spectra_shift.as_dict,
                                 )
+                                dpg.add_button(
+                                    label="R",
+                                    callback=self.settings.spectra_shift.set_default,
+                                    width=-1,
+                                )
+                                with dpg.tooltip(
+                                    parent=dpg.last_item(), delay=TOOLTIP_DELAY_SEC
+                                ):
+                                    dpg.add_text("Reset")
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Normalize".rjust(LABEL_PAD))
                                 dpg.add_checkbox(
                                     **self.settings.spectra_normalized.as_dict
+                                )
+                                dpg.add_combo(
+                                    items=["Area", "Max. intensity", "Norm"],
+                                    width=-1,
+                                    **self.settings.spectra_normalization_method.as_dict,
                                 )
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Normalize in range:".rjust(LABEL_PAD))
@@ -1212,35 +1258,50 @@ class UI:
                                 )
 
                             with dpg.group(tag="baseline_method_poly", show=False):
-                                dpg.add_separator()
                                 with dpg.group(horizontal=True):
                                     dpg.add_text("Polynomial degree".rjust(LABEL_PAD))
                                     dpg.add_slider_int(
-                                        width=-1,
+                                        width=-30,
                                         min_value=1,
                                         max_value=20,
                                         clamped=True,
                                         **self.settings.baseline_polynomial_degree.as_dict,
                                     )
+                                    dpg.add_button(
+                                        label="R",
+                                        callback=self.settings.baseline_polynomial_degree.set_default,
+                                        width=-1,
+                                    )
+                                    with dpg.tooltip(
+                                        parent=dpg.last_item(), delay=TOOLTIP_DELAY_SEC
+                                    ):
+                                        dpg.add_text("Reset")
                                 with dpg.group(horizontal=True):
                                     dpg.add_text("Clip to zero".rjust(LABEL_PAD))
                                     dpg.add_checkbox(
                                         **self.settings.baseline_clipped_to_zero.as_dict
                                     )
-                                dpg.add_separator()
 
                             with dpg.group(tag="baseline_method_snip", show=True):
-                                dpg.add_separator()
 
                                 with dpg.group(horizontal=True):
                                     dpg.add_text("Max half window".rjust(LABEL_PAD))
                                     dpg.add_slider_int(
-                                        width=-1,
+                                        width=-30,
                                         min_value=2,
                                         max_value=80,
                                         clamped=True,
                                         **self.settings.baseline_max_half_window.as_dict,
                                     )
+                                    dpg.add_button(
+                                        label="R",
+                                        callback=self.settings.baseline_max_half_window.set_default,
+                                        width=-1,
+                                    )
+                                    with dpg.tooltip(
+                                        parent=dpg.last_item(), delay=TOOLTIP_DELAY_SEC
+                                    ):
+                                        dpg.add_text("Reset")
 
                                 with dpg.group(horizontal=True):
                                     dpg.add_text("Filter order".rjust(LABEL_PAD))
@@ -1249,7 +1310,6 @@ class UI:
                                         width=-1,
                                         **self.settings.baseline_filter_order.as_dict,
                                     )
-                                dpg.add_separator()
 
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Min peak height".rjust(LABEL_PAD))
@@ -1258,9 +1318,18 @@ class UI:
                                     max_value=0.2,
                                     format="%.3f",
                                     clamped=True,
-                                    width=-1,
+                                    width=-30,
                                     **self.settings.min_peak_height.as_dict,
                                 )
+                                dpg.add_button(
+                                    label="R",
+                                    callback=self.settings.min_peak_height.set_default,
+                                    width=-1,
+                                )
+                                with dpg.tooltip(
+                                    parent=dpg.last_item(), delay=TOOLTIP_DELAY_SEC
+                                ):
+                                    dpg.add_text("Reset")
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Min peak prominance".rjust(LABEL_PAD))
                                 dpg.add_slider_float(
@@ -1268,19 +1337,37 @@ class UI:
                                     max_value=0.2,
                                     format="%.3f",
                                     clamped=True,
-                                    width=-1,
+                                    width=-30,
                                     **self.settings.min_peak_prominance.as_dict,
                                 )
+                                dpg.add_button(
+                                    label="R",
+                                    callback=self.settings.min_peak_prominance.set_default,
+                                    width=-1,
+                                )
+                                with dpg.tooltip(
+                                    parent=dpg.last_item(), delay=TOOLTIP_DELAY_SEC
+                                ):
+                                    dpg.add_text("Reset")
                             with dpg.group(horizontal=True):
-                                dpg.add_text("Peak smoothing sigma".rjust(LABEL_PAD))
+                                dpg.add_text("Peak smoothing radius".rjust(LABEL_PAD))
                                 dpg.add_slider_float(
                                     min_value=0.0,
                                     max_value=2,
                                     format="%.3f",
                                     clamped=True,
-                                    width=-1,
+                                    width=-30,
                                     **self.settings.peak_smoothing_sigma.as_dict,
                                 )
+                                dpg.add_button(
+                                    label="R",
+                                    callback=self.settings.peak_smoothing_sigma.set_default,
+                                    width=-1,
+                                )
+                                with dpg.tooltip(
+                                    parent=dpg.last_item(), delay=TOOLTIP_DELAY_SEC
+                                ):
+                                    dpg.add_text("Reset")
 
                     with dpg.collapsing_header(label="Series", default_open=True):
                         with dpg.child_window(
@@ -1345,9 +1432,18 @@ class UI:
                                     max_value=40,
                                     format="%.2f",
                                     clamped=True,
-                                    width=-1,
+                                    width=-30,
                                     **self.settings.fitting_x_threshold.as_dict,
                                 )
+                                dpg.add_button(
+                                    label="R",
+                                    callback=self.settings.fitting_x_threshold.set_default,
+                                    width=-1,
+                                )
+                                with dpg.tooltip(
+                                    parent=dpg.last_item(), delay=TOOLTIP_DELAY_SEC
+                                ):
+                                    dpg.add_text("Reset")
                             with dpg.group(horizontal=True):
                                 dpg.add_text(
                                     "Y Window threshold".rjust(LABEL_PAD),
@@ -1357,9 +1453,18 @@ class UI:
                                     max_value=0.2,
                                     format="%.3f",
                                     clamped=True,
-                                    width=-1,
+                                    width=-30,
                                     **self.settings.fitting_y_threshold.as_dict,
                                 )
+                                dpg.add_button(
+                                    label="R",
+                                    callback=self.settings.fitting_y_threshold.set_default,
+                                    width=-1,
+                                )
+                                with dpg.tooltip(
+                                    parent=dpg.last_item(), delay=TOOLTIP_DELAY_SEC
+                                ):
+                                    dpg.add_text("Reset")
                             with dpg.group(horizontal=True):
                                 dpg.add_text("".rjust(LABEL_PAD))
                                 dpg.add_combo(
@@ -1827,7 +1932,7 @@ class UI:
             if not dpg.does_item_exist(plot):
                 continue
             plot_user_data = dpg.get_item_user_data(plot)
-            if plot_user_data is None:
+            if not isinstance(plot_user_data, dict):
                 continue
 
             peak_id = plot_user_data.get("fit", None)

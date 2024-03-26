@@ -41,6 +41,9 @@ class Setting[T]:
         if self.callback is not None and not skip_callback:
             self.callback()
 
+    def set_default(self):
+        self.set(self.default_value)
+
     @property
     def as_dict(self):
         args: DPGWidgetArgs[T] = {
@@ -64,6 +67,8 @@ class Settings:
     sample_drop_first: Setting[int]
     spectra_normalized: Setting[bool]
     spectra_fit_to_axes: Setting[bool]
+    spectra_normalization_method: Setting[Literal["Area", "Max. intensity", "Norm"]]
+    spectra_shift: Setting[float]
     normalized_from: Setting[float]
     normalized_to: Setting[float]
     baseline_removal_method: Setting[BaselineRemoval]
@@ -83,6 +88,11 @@ class Settings:
     fitting_y_threshold_type: Setting[Literal["Absolute", "Relative"]]
     fitting_max_iterations: Setting[Literal[-1] | int]
     fitting_fit_display_mode: Setting[Literal["Sum", "Components", "Both"]]
+    fitting_fit_info: Setting[Literal["Minimal", "All"]]
+    fitting_autoselect: Setting[bool]
+    fitting_inclide_in_legend: Setting[bool]
+    fitting_default_color: Setting[Literal["Series", "Negative", "Custom"]]
+    fitting_fill: Setting[bool]
 
     def __iter__(self) -> Generator[Setting, None, None]:
         return (getattr(self, field.name) for field in fields(Settings))
