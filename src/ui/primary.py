@@ -240,7 +240,7 @@ class UI:
             fitting_default_color=Setting(
                 tag="settings_fitting_default_color",
                 default_value="Negative",
-                callback=self.show_fit_plots,
+                callback=self.change_default_fit_color,
             ),
             fitting_fill=Setting(
                 tag="settings_fitting_fill",
@@ -255,6 +255,11 @@ class UI:
             fitting_inclide_in_legend=Setting(
                 tag="settings_fitting_inclide_in_legend",
                 default_value=True,
+                callback=self.show_fit_plots,
+            ),
+            fitting_default_color_colorpicker=Setting(
+                tag="settings_fitting_default_color_colorpicker",
+                default_value=[45, 90, 210, 255],
                 callback=self.show_fit_plots,
             ),
         )
@@ -1579,6 +1584,11 @@ class UI:
                                             width=-1,
                                             **self.settings.fitting_default_color.as_dict,
                                         )
+                                        dpg.add_color_edit(
+                                            no_inputs=True,
+                                            show=False,
+                                            **self.settings.fitting_default_color_colorpicker.as_dict,
+                                        )
                                     with dpg.group(horizontal=True):
                                         dpg.add_text("Fill fit curve".rjust(LABEL_PAD))
                                         dpg.add_checkbox(
@@ -2111,3 +2121,16 @@ class UI:
             dpg.hide_item("baseline_method_poly")
 
         self.show_libs_plots()
+
+    def change_default_fit_color(self):
+        if self.settings.fitting_default_color.value == "Custom":
+            dpg.show_item(self.settings.fitting_default_color_colorpicker.tag)
+            dpg.configure_item(self.settings.fitting_default_color.tag, width=-30)
+        elif self.settings.fitting_default_color.value == "Negative":
+            dpg.configure_item(self.settings.fitting_default_color.tag, width=-1)
+            dpg.hide_item(self.settings.fitting_default_color_colorpicker.tag)
+        elif self.settings.fitting_default_color.value == "Series":
+            dpg.configure_item(self.settings.fitting_default_color.tag, width=-1)
+            dpg.hide_item(self.settings.fitting_default_color_colorpicker.tag)
+
+        self.show_fit_plots()

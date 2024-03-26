@@ -93,6 +93,7 @@ class Settings:
     fitting_inclide_in_legend: Setting[bool]
     fitting_default_color: Setting[Literal["Series", "Negative", "Custom"]]
     fitting_fill: Setting[bool]
+    fitting_default_color_colorpicker: Setting[list[int]]
 
     def __iter__(self) -> Generator[Setting, None, None]:
         return (getattr(self, field.name) for field in fields(Settings))
