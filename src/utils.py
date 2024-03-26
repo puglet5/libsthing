@@ -298,7 +298,7 @@ class Spectrum:
         elif method == BaselineRemoval.AMM:
             bkg = baseline_fitter.adaptive_minmax(y)[0]
         elif method == BaselineRemoval.POLY:
-            bkg = baseline_fitter.penalized_poly(y, poly_order=8)[0]
+            bkg = baseline_fitter.penalized_poly(y, **method_params)[0]
         elif method == BaselineRemoval.NONE:
             return np.zeros_like(y)
         else:

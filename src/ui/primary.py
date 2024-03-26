@@ -140,7 +140,7 @@ class UI:
             baseline_removal_method=Setting(
                 "settings_baseline_removal_method",
                 BaselineRemoval.SNIP,
-                self.show_libs_plots,
+                self.change_baseline_method,
             ),
             baseline_clipped_to_zero=Setting(
                 "settings_baseline_clipped_to_zero",
@@ -216,6 +216,11 @@ class UI:
                 "settings_fitting_fit_display_mode",
                 "Sum",
                 self.show_fit_plots,
+            ),
+            baseline_polynomial_degree=Setting(
+                tag="settings_baseline_polynomial_degree",
+                default_value=8,
+                callback=self.show_libs_plots,
             ),
         )
 
@@ -543,7 +548,22 @@ class UI:
         )
         shift: float = dpg.get_value("libs_x_shift")
 
+        baseline_params = {}
+        if self.settings.baseline_removal_method.value == BaselineRemoval.NONE:
+            baseline_params = {}
+        elif self.settings.baseline_removal_method.value == BaselineRemoval.AMM:
+            baseline_params = {}
+        elif self.settings.baseline_removal_method.value == BaselineRemoval.POLY:
+            baseline_params = {
+                "poly_order": self.settings.baseline_polynomial_degree.value
+            }
+        elif self.settings.baseline_removal_method.value == BaselineRemoval.SNIP:
+            baseline_params = {
+                "max_half_window": self.settings.baseline_max_half_window.value,
+                "filter_order": int(self.settings.baseline_filter_order.value),
+            }
         with dpg.mutex():
+
             for i, series in enumerate(self.project.selected_series):
                 spectrum = series.averaged
                 assert spectrum.raw_spectral_data is not None
@@ -554,10 +574,7 @@ class UI:
                     normalization_range=normalization_range,
                     baseline_removal=baseline_removal,
                     baseline_clip=self.settings.baseline_clipped_to_zero.value,
-                    baseline_params={
-                        "max_half_window": self.settings.baseline_max_half_window.value,
-                        "filter_order": int(self.settings.baseline_filter_order.value),
-                    },
+                    baseline_params=baseline_params,
                 )
                 x, y = spectrum.xy.tolist()
 
@@ -1194,29 +1211,45 @@ class UI:
                                     **self.settings.baseline_removal_method.as_dict,
                                 )
 
-                            with dpg.group(horizontal=True):
-                                dpg.add_text("Clip to zero".rjust(LABEL_PAD))
-                                dpg.add_checkbox(
-                                    **self.settings.baseline_clipped_to_zero.as_dict
-                                )
+                            with dpg.group(tag="baseline_method_poly", show=False):
+                                dpg.add_separator()
+                                with dpg.group(horizontal=True):
+                                    dpg.add_text("Polynomial degree".rjust(LABEL_PAD))
+                                    dpg.add_slider_int(
+                                        width=-1,
+                                        min_value=1,
+                                        max_value=20,
+                                        clamped=True,
+                                        **self.settings.baseline_polynomial_degree.as_dict,
+                                    )
+                                with dpg.group(horizontal=True):
+                                    dpg.add_text("Clip to zero".rjust(LABEL_PAD))
+                                    dpg.add_checkbox(
+                                        **self.settings.baseline_clipped_to_zero.as_dict
+                                    )
+                                dpg.add_separator()
 
-                            with dpg.group(horizontal=True):
-                                dpg.add_text("Max half window".rjust(LABEL_PAD))
-                                dpg.add_slider_int(
-                                    width=-1,
-                                    min_value=2,
-                                    max_value=80,
-                                    clamped=True,
-                                    **self.settings.baseline_max_half_window.as_dict,
-                                )
+                            with dpg.group(tag="baseline_method_snip", show=True):
+                                dpg.add_separator()
 
-                            with dpg.group(horizontal=True):
-                                dpg.add_text("Filter order".rjust(LABEL_PAD))
-                                dpg.add_combo(
-                                    items=["2", "4", "6", "8"],
-                                    width=-1,
-                                    **self.settings.baseline_filter_order.as_dict,
-                                )
+                                with dpg.group(horizontal=True):
+                                    dpg.add_text("Max half window".rjust(LABEL_PAD))
+                                    dpg.add_slider_int(
+                                        width=-1,
+                                        min_value=2,
+                                        max_value=80,
+                                        clamped=True,
+                                        **self.settings.baseline_max_half_window.as_dict,
+                                    )
+
+                                with dpg.group(horizontal=True):
+                                    dpg.add_text("Filter order".rjust(LABEL_PAD))
+                                    dpg.add_combo(
+                                        items=["2", "4", "6", "8"],
+                                        width=-1,
+                                        **self.settings.baseline_filter_order.as_dict,
+                                    )
+                                dpg.add_separator()
 
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Min peak height".rjust(LABEL_PAD))
@@ -1948,3 +1981,19 @@ class UI:
                 user_data="emission_plot",
             )
             dpg.bind_item_theme(dpg.last_item(), plot_theme)
+
+    def change_baseline_method(self):
+        if self.settings.baseline_removal_method.value == BaselineRemoval.NONE:
+            dpg.hide_item("baseline_method_snip")
+            dpg.hide_item("baseline_method_poly")
+        elif self.settings.baseline_removal_method.value == BaselineRemoval.SNIP:
+            dpg.show_item("baseline_method_snip")
+            dpg.hide_item("baseline_method_poly")
+        elif self.settings.baseline_removal_method.value == BaselineRemoval.POLY:
+            dpg.hide_item("baseline_method_snip")
+            dpg.show_item("baseline_method_poly")
+        elif self.settings.baseline_removal_method.value == BaselineRemoval.AMM:
+            dpg.hide_item("baseline_method_snip")
+            dpg.hide_item("baseline_method_poly")
+
+        self.show_libs_plots()

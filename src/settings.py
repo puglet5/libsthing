@@ -68,6 +68,7 @@ class Settings:
     normalized_to: Setting[float]
     baseline_removal_method: Setting[BaselineRemoval]
     baseline_clipped_to_zero: Setting[bool]
+    baseline_polynomial_degree: Setting[int]
     baseline_max_half_window: Setting[int]
     baseline_filter_order: Setting[Literal["2", "4", "6", "8"]]
     min_peak_height: Setting[float]
