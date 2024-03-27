@@ -4,6 +4,7 @@ from typing import Callable, Generator, Literal, TypedDict
 import dearpygui.dearpygui as dpg
 from attrs import define, field, fields
 
+from src.history import HISTORY, OperationCallback, undoable
 from src.utils import DPGItem
 
 
@@ -20,26 +21,67 @@ class DPGWidgetArgs[T](TypedDict):
     callback: Callable
 
 
-@define
+@define(repr=False)
 class Setting[T]:
     tag: DPGItem
     default_value: T = field()
     value: T = field(init=False)
     callback: Callable | None
+    _last_value: T = field(init=False)
 
     def __attrs_post_init__(self):
         self.value = self.default_value
+        self._last_value = self.default_value
 
     def _update(self):
         self.value = dpg.get_value(self.tag)
         if self.callback is not None:
             self.callback()
 
-    def set(self, value: T, skip_callback=False):
+    @undoable
+    def set(self, value: T, /, skip_callback=False, skip_undo=True):
         dpg.set_value(self.tag, value)
         self.value = value
         if self.callback is not None and not skip_callback:
             self.callback()
+
+        if not skip_undo:
+            self._set_last_value()
+
+            operation_direct: OperationCallback = (
+                self.set,
+                (self.value,),
+                {"skip_callback": skip_callback},
+            )
+
+            operation_inverse: OperationCallback = (
+                self.set,
+                (self._last_value,),
+                {"skip_callback": skip_callback},
+            )
+
+            yield operation_direct
+            yield operation_inverse
+        else:
+            yield None
+
+    def bind_last_value_handler(self):
+        with dpg.item_handler_registry(tag=f"{self.tag}_undo_handler"):
+            dpg.add_item_activated_handler(callback=self._set_last_value)
+            dpg.add_item_deactivated_handler(callback=self._set_current)
+
+        dpg.bind_item_handler_registry(self.tag, f"{self.tag}_undo_handler")
+
+    def _set_last_value(self):
+        # ran before _update
+
+        # prevent setting duplicate values
+        if self.value == dpg.get_value(self.tag):
+            return
+        self._last_value = self.value
+
+    def _set_current(self):
+        self.set(dpg.get_value(self.tag), skip_callback=False, skip_undo=False)
 
     def set_default(self):
         self.set(self.default_value)
@@ -68,9 +110,9 @@ class Settings:
     spectra_normalized: Setting[bool]
     spectra_fit_to_axes: Setting[bool]
     spectra_normalization_method: Setting[Literal["Area", "Max. intensity", "Norm"]]
-    spectra_shift: Setting[float]
     normalized_from: Setting[float]
     normalized_to: Setting[float]
+    spectra_shift: Setting[float]
     baseline_removal_method: Setting[BaselineRemoval]
     baseline_clipped_to_zero: Setting[bool]
     baseline_polynomial_degree: Setting[int]
@@ -81,8 +123,8 @@ class Settings:
     peak_smoothing_sigma: Setting[float]
     selection_guides_shown: Setting[bool]
     region_subdivided: Setting[bool]
-    fitting_windows_shown: Setting[bool]
     peaks_shown: Setting[bool]
+    fitting_windows_shown: Setting[bool]
     fitting_x_threshold: Setting[float]
     fitting_y_threshold: Setting[float]
     fitting_y_threshold_type: Setting[Literal["Absolute", "Relative"]]

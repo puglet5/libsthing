@@ -12,6 +12,7 @@ from colorhash import ColorHash
 from natsort import index_natsorted, order_by_index
 
 from settings import BaselineRemoval, Setting, Settings
+from src.history import HISTORY
 from src.static.nist_processed.line_data import element_plot_data, get_emission_data
 from src.ui.loading_indicator import LoadingIndicator
 from src.ui.peak_table import PeakTable
@@ -82,6 +83,11 @@ class UI:
         self.bind_item_handlers()
 
         dpg.bind_font(default_font)
+        self.bind_settings()
+
+    def bind_settings(self):
+        for s in self.settings:
+            s.bind_last_value_handler()
 
     def start(self, dev=False, debug=False):
         dpg.setup_dearpygui()
@@ -387,6 +393,12 @@ class UI:
             elif dpg.is_key_pressed(dpg.mvKey_M):
                 menubar_visible = dpg.get_item_configuration(WINDOW_TAG)["menubar"]
                 dpg.configure_item(WINDOW_TAG, menubar=(not menubar_visible))
+
+        if dpg.is_key_pressed(dpg.mvKey_Z):
+            HISTORY.undo_last()
+
+        if dpg.is_key_pressed(dpg.mvKey_Y):
+            HISTORY.redo_last()
 
     def series_left_click(self):
         if not dpg.is_item_clicked("series_list_wrapper"):
@@ -905,6 +917,9 @@ class UI:
                     peaks = spectrum.peaks
                     assert s.color
                     for i, peak in enumerate(peaks):
+                        if dpg.does_item_exist(f"{s.id}_peak_{i}"):
+                            continue
+
                         dpg.add_drag_point(
                             color=s.color,
                             default_value=(peak[0], peak[1]),
