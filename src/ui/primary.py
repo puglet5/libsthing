@@ -49,6 +49,9 @@ class UI:
     thumbnail_plot_theme: int = field(init=False, default=0)
     active_thumbnail_plot_theme: int = field(init=False, default=0)
     series_list_n_columns: int = field(init=False, default=5)
+    selected_region: list[float | None] | list[float] | list[None] = field(
+        init=False, default=[None, None]
+    )
 
     def __attrs_post_init__(self):
         self.setup_settings()
@@ -612,6 +615,7 @@ class UI:
                     normalized=normalized,
                     shift=self.settings.spectra_shift.value,
                     normalization_range=normalization_range,
+                    normalization_method=self.settings.spectra_normalization_method.value,
                     baseline_removal=baseline_removal,
                     baseline_clip=self.settings.baseline_clipped_to_zero.value,
                     baseline_params=baseline_params,
@@ -762,8 +766,8 @@ class UI:
             y_threshold = self.settings.fitting_y_threshold.value
             threshold_type = self.settings.fitting_y_threshold_type.value
             subdivide = self.settings.region_subdivided.value
-            if None not in self.project.selected_region:
-                region: Window = self.project.selected_region  # type: ignore
+            if None not in self.selected_region:
+                region: Window = self.selected_region  # type: ignore
             else:
                 region = spectrum.x_limits
 
@@ -811,8 +815,8 @@ class UI:
             else:
                 for series_id, series in enumerate(self.project.selected_series):
                     spectrum = series.averaged
-                    if None not in self.project.selected_region:
-                        region: Window = self.project.selected_region  # type: ignore
+                    if None not in self.selected_region:
+                        region: Window = self.selected_region  # type: ignore
                     else:
                         region = spectrum.x_limits
 
@@ -863,8 +867,8 @@ class UI:
             else:
                 for id, s in enumerate(self.project.selected_series):
                     spectrum = s.averaged
-                    if None not in self.project.selected_region:
-                        region: Window = self.project.selected_region  # type: ignore
+                    if None not in self.selected_region:
+                        region: Window = self.selected_region  # type: ignore
                     else:
                         region = spectrum.x_limits
 
@@ -944,7 +948,7 @@ class UI:
             else:
                 dpg.set_value("region_guide_end", dpg.get_value("region_guide_start"))
 
-        self.project.selected_region[start_or_end] = dpg.get_value(guide)
+        self.selected_region[start_or_end] = dpg.get_value(guide)
 
         region = f"{(start_value):.2f}..{(end_value):.2f} nm"
 
@@ -962,12 +966,12 @@ class UI:
                 dpg.delete_item("region_guide_end")
             dpg.set_value("plot_selected_region_text", "None")
             if not dpg.is_plot_queried("libs_plots"):
-                self.project.selected_region = [None, None]
+                self.selected_region = [None, None]
             self.refresh_all()
             return
 
-        if None in self.project.selected_region:
-            region_start, region_end = self.project.selected_region
+        if None in self.selected_region:
+            region_start, region_end = self.selected_region
             if len(self.project.selected_series) != 0:
                 limit_start, limit_end = self.project.selected_series[
                     0
@@ -980,10 +984,10 @@ class UI:
             if start is None or end is None:
                 return
 
-            self.project.selected_region = [start, end]
+            self.selected_region = [start, end]
 
         else:
-            start, end = self.project.selected_region
+            start, end = self.selected_region
 
         if not dpg.does_item_exist("region_guide_start"):
             dpg.add_drag_line(
@@ -1016,8 +1020,8 @@ class UI:
     def plot_query_callback(self, sender: DPGItem, data: tuple[float,]):
         with dpg.mutex():
             region = list(data[0:2])
-            if not region == self.project.selected_region:
-                self.project.selected_region = region
+            if not region == self.selected_region:
+                self.selected_region = region
                 if not self.settings.selection_guides_shown.value:
                     self.settings.selection_guides_shown.set(True)
 
@@ -1250,9 +1254,11 @@ class UI:
                                 dpg.add_checkbox(
                                     **self.settings.spectra_fit_to_axes.as_dict
                                 )
+                            
+                            dpg.add_spacer(height=10)
 
                             with dpg.group(horizontal=True):
-                                dpg.add_text("Remove baseline".rjust(LABEL_PAD))
+                                dpg.add_text("Baseline removal".rjust(LABEL_PAD))
 
                                 dpg.add_combo(
                                     items=[
@@ -1296,7 +1302,7 @@ class UI:
                                     dpg.add_text("Max half window".rjust(LABEL_PAD))
                                     dpg.add_slider_int(
                                         width=-30,
-                                        min_value=2,
+                                        min_value=8,
                                         max_value=80,
                                         clamped=True,
                                         **self.settings.baseline_max_half_window.as_dict,
@@ -1318,6 +1324,8 @@ class UI:
                                         width=-1,
                                         **self.settings.baseline_filter_order.as_dict,
                                     )
+                            
+                            dpg.add_spacer(height=10)
 
                             with dpg.group(horizontal=True):
                                 dpg.add_text("Min peak height".rjust(LABEL_PAD))

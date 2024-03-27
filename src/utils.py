@@ -311,6 +311,7 @@ class Spectrum:
         shift: float,
         normalized=False,
         normalization_range: Window = (1, -1),
+        normalization_method: Literal["Area", "Max. intensity", "Norm"] = "Area",
         baseline_clip=True,
         baseline_removal: BaselineRemoval = BaselineRemoval.SNIP,
         baseline_params: dict[str, int] | None = None,
@@ -350,7 +351,18 @@ class Spectrum:
             ):
                 pass
             else:
-                y = y / y[np.logical_and(self.x > norm_min, self.x < norm_max)].max()
+                normalization_range_mask = np.logical_and(
+                    self.x > norm_min, self.x < norm_max
+                )
+                if normalization_method == "Max. intensity":
+                    y = y / y[normalization_range_mask].max()
+                elif normalization_method == "Area":
+                    y = y / np.trapz(
+                        y[normalization_range_mask],
+                        x[normalization_range_mask],
+                    )
+                elif normalization_method == "Norm":
+                    y = y / np.linalg.norm(y[normalization_range_mask])
 
         self.processed_spectral_data = np.array([x, y]).T
 
@@ -934,9 +946,6 @@ class Project:
     series: Mapping[str, Series] = field(init=False, factory=dict)
     plotted_series_ids: set[str] = field(init=False, default=set())
     plotted_fits_ids: set[str] = field(init=False, default=set())
-    selected_region: list[float | None] | list[float] | list[None] = field(
-        init=False, default=[None, None]
-    )
     common_x: bool = field(default=False)
     sample_drop_first: int = field(default=0)
 
