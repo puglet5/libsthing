@@ -5,7 +5,7 @@ import pandas as pd
 import pyarrow as pa
 from pyarrow import csv
 
-from src.ui.periodic_table import ELEMENT_SYMBOLS, element_symbol_to_z
+from src.utils import Window
 
 PA_READ_OPTIONS = csv.ReadOptions(
     skip_rows=1,
@@ -36,17 +36,18 @@ EMISSION_LINE_DATA: pd.DataFrame = csv.read_csv(
 ).to_pandas()
 
 
-def get_emission_data(symbol: str):
-    return (
+def get_emission_data(symbol: str, wl_window: Window, max_ionization_level: int = 3):
+    emission_data = (
         EMISSION_LINE_DATA.groupby("element")
         .get_group(symbol)
         .drop(columns=["element"])
         .reset_index(drop=True)
     )
 
-
-def select_wl_region(emission_data: pd.DataFrame, left: float, right: float):
-    return emission_data[emission_data["wavelength"].between(left, right)]
+    emission_data = emission_data[emission_data["wavelength"].between(*wl_window)]
+    emission_data = emission_data[emission_data["level"].le(max_ionization_level)]
+    
+    return emission_data
 
 
 def element_plot_data(element_data: pd.DataFrame):

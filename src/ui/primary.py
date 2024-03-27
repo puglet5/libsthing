@@ -11,11 +11,7 @@ from attrs import define, field
 from natsort import index_natsorted, order_by_index
 
 from settings import BaselineRemoval, Setting, Settings
-from src.static.nist_processed.line_data import (
-    element_plot_data,
-    get_emission_data,
-    select_wl_region,
-)
+from src.static.nist_processed.line_data import element_plot_data, get_emission_data
 from src.ui.loading_indicator import LoadingIndicator
 from src.ui.peak_table import PeakTable
 from src.ui.periodic_table import PeriodicTable
@@ -606,7 +602,6 @@ class UI:
                 "filter_order": int(self.settings.baseline_filter_order.value),
             }
         with dpg.mutex():
-
             for i, series in enumerate(self.project.selected_series):
                 spectrum = series.averaged
                 assert spectrum.raw_spectral_data is not None
@@ -665,14 +660,15 @@ class UI:
                     self.project.plotted_series_ids.discard(series.id)
                     dpg.delete_item(f"series_plot_{series.id}")
 
-        line_series = dpg.get_item_children("libs_y_axis", slot=1)
-        assert isinstance(line_series, list)
-        line_series_labels = [dpg.get_item_label(s) for s in line_series]
-        index = index_natsorted(line_series_labels)
-        sorted_line_series: list[int] = order_by_index(line_series, index)  # type: ignore
-        dpg.reorder_items("libs_y_axis", slot=1, new_order=sorted_line_series)
+            # sort series in plot legend
+            line_series = dpg.get_item_children("libs_y_axis", slot=1)
+            assert isinstance(line_series, list)
+            line_series_labels = [dpg.get_item_label(s) for s in line_series]
+            index = index_natsorted(line_series_labels)
+            sorted_line_series: list[int] = order_by_index(line_series, index)  # type: ignore
+            dpg.reorder_items("libs_y_axis", slot=1, new_order=sorted_line_series)
 
-        self.refresh_all()
+            self.refresh_all()
 
     def populate_series_list(self, skip_plot_update=False, initial=False):
         dpg.delete_item("series_list_wrapper", children_only=True)
@@ -1254,7 +1250,7 @@ class UI:
                                 dpg.add_checkbox(
                                     **self.settings.spectra_fit_to_axes.as_dict
                                 )
-                            
+
                             dpg.add_spacer(height=10)
 
                             with dpg.group(horizontal=True):
@@ -1324,7 +1320,7 @@ class UI:
                                         width=-1,
                                         **self.settings.baseline_filter_order.as_dict,
                                     )
-                            
+
                             dpg.add_spacer(height=10)
 
                             with dpg.group(horizontal=True):
@@ -2082,8 +2078,8 @@ class UI:
             (
                 symbol,
                 element_plot_data(
-                    select_wl_region(
-                        get_emission_data(symbol), *emission_data_wl_region
+                    get_emission_data(
+                        symbol, emission_data_wl_region, max_ionization_level=1
                     )
                 ),
             )
