@@ -94,6 +94,10 @@ class Settings:
     fitting_default_color: Setting[Literal["Series", "Negative", "Custom"]]
     fitting_fill: Setting[bool]
     fitting_default_color_colorpicker: Setting[list[int]]
+    emission_lines_max_ionization_level: Setting[int]
+    emission_lines_follow_selected_region: Setting[bool]
+    emission_lines_intensity_threshold: Setting[float]
+    emission_lines_fit_intensity: Setting[bool]
 
     def __iter__(self) -> Generator[Setting, None, None]:
         return (getattr(self, field.name) for field in fields(Settings))

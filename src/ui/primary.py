@@ -8,6 +8,7 @@ import dearpygui.dearpygui as dpg
 import numpy as np
 import pandas as pd
 from attrs import define, field
+from colorhash import ColorHash
 from natsort import index_natsorted, order_by_index
 
 from settings import BaselineRemoval, Setting, Settings
@@ -27,6 +28,7 @@ from src.utils import (
     Series,
     Window,
     flatten,
+    nearest,
 )
 
 logger = logging.getLogger(__name__)
@@ -260,6 +262,26 @@ class UI:
                 tag="settings_fitting_default_color_colorpicker",
                 default_value=[45, 90, 210, 255],
                 callback=self.show_fit_plots,
+            ),
+            emission_lines_max_ionization_level=Setting(
+                tag="settings_emission_lines_max_ionization_level",
+                default_value=1,
+                callback=self.show_emission_plots,
+            ),
+            emission_lines_follow_selected_region=Setting(
+                tag="settings_emission_lines_follow_selected_region",
+                default_value=True,
+                callback=self.show_emission_plots,
+            ),
+            emission_lines_intensity_threshold=Setting(
+                tag="settings_emission_lines_intensity_threshold",
+                default_value=0.05,
+                callback=self.show_emission_plots,
+            ),
+            emission_lines_fit_intensity=Setting(
+                tag="emission_lines_fit_intensity",
+                default_value=False,
+                callback=self.show_emission_plots,
             ),
         )
 
@@ -646,7 +668,6 @@ class UI:
                         display_mode=dpg.mvColorEdit_rgb,
                         input_mode=dpg.mvColorEdit_input_rgb,
                     )
-
                 self.project.plotted_series_ids.add(series.id)
 
             if self.settings.spectra_fit_to_axes.value:
@@ -669,6 +690,8 @@ class UI:
             dpg.reorder_items("libs_y_axis", slot=1, new_order=sorted_line_series)
 
             self.refresh_all()
+            if self.settings.emission_lines_fit_intensity.value:
+                self.show_emission_plots()
 
     def populate_series_list(self, skip_plot_update=False, initial=False):
         dpg.delete_item("series_list_wrapper", children_only=True)
@@ -951,6 +974,7 @@ class UI:
         dpg.set_value("plot_selected_region_text", region)
 
         self.refresh_all()
+        self.show_emission_plots()
 
     def toggle_selection_guides(self):
         state = self.settings.selection_guides_shown.value
@@ -1012,6 +1036,7 @@ class UI:
         dpg.set_value("plot_selected_region_text", region)
 
         self.refresh_all()
+        self.show_emission_plots()
 
     def plot_query_callback(self, sender: DPGItem, data: tuple[float,]):
         with dpg.mutex():
@@ -1174,7 +1199,9 @@ class UI:
                                     **self.settings.sample_drop_first.as_dict,
                                 )
 
-                    with dpg.collapsing_header(label="Plots", default_open=True):
+                    with dpg.collapsing_header(
+                        label="Data Preprocessing", default_open=True
+                    ):
                         with dpg.child_window(
                             width=-1,
                             height=350,
@@ -1496,7 +1523,10 @@ class UI:
 
                 with dpg.group(horizontal=False):
                     with dpg.child_window(
-                        border=False, width=-1, height=-SIDEBAR_WIDTH, tag="data"
+                        border=False,
+                        width=-1,
+                        height=-SIDEBAR_WIDTH,
+                        tag="data",
                     ):
                         with dpg.group(horizontal=True):
                             with dpg.plot(
@@ -1518,7 +1548,7 @@ class UI:
                                 )
                                 dpg.add_plot_axis(
                                     dpg.mvYAxis,
-                                    label="Line Intensity (arb. unit of energy flux)",
+                                    label="Line Intensity (arb. u.)",
                                     tag="libs_y_axis",
                                 )
 
@@ -1599,6 +1629,12 @@ class UI:
                                             **self.settings.fitting_fill.as_dict
                                         )
 
+                                    with dpg.group(horizontal=True):
+                                        dpg.add_text(
+                                            "Show difference plot".rjust(LABEL_PAD)
+                                        )
+                                        dpg.add_checkbox(default_value=False)
+
                                 with dpg.child_window(
                                     width=-1,
                                     height=-1,
@@ -1626,6 +1662,41 @@ class UI:
             tag="project_directory_picker",
         ):
             ...
+
+        with dpg.child_window(
+            parent="periodic_table",
+            border=True,
+            no_scrollbar=True,
+            height=-1,
+            width=-1,
+        ):
+            with dpg.group(horizontal=True):
+                dpg.add_text("Max. ionization level".rjust(LABEL_PAD))
+                dpg.add_slider_int(
+                    min_value=1,
+                    max_value=3,
+                    clamped=True,
+                    width=SIDEBAR_WIDTH // 2,
+                    **self.settings.emission_lines_max_ionization_level.as_dict,
+                )
+            with dpg.group(horizontal=True):
+                dpg.add_text("Intensity threshold".rjust(LABEL_PAD))
+                dpg.add_slider_float(
+                    min_value=0,
+                    max_value=0.2,
+                    clamped=True,
+                    format="%.2f",
+                    width=SIDEBAR_WIDTH // 2,
+                    **self.settings.emission_lines_intensity_threshold.as_dict,
+                )
+            with dpg.group(horizontal=True):
+                dpg.add_text("Follow selected region".rjust(LABEL_PAD))
+                dpg.add_checkbox(
+                    **self.settings.emission_lines_follow_selected_region.as_dict
+                )
+            with dpg.group(horizontal=True):
+                dpg.add_text("Fit intensity".rjust(LABEL_PAD))
+                dpg.add_checkbox(**self.settings.emission_lines_fit_intensity.as_dict)
 
     def toggle_sidebar(self):
         if not dpg.is_item_shown("sidebar"):
@@ -2068,18 +2139,27 @@ class UI:
         emission_plots = dpg.get_item_children("libs_y_axis", slot=1)
         assert isinstance(emission_plots, list)
 
-        if emission_plots:
-            for plot in emission_plots:
-                if dpg.get_item_user_data(plot) == "emission_plot":
-                    dpg.delete_item(plot)
+        if self.settings.emission_lines_follow_selected_region.value and all(
+            self.selected_region
+        ):
+            emission_data_wl_region: Window = tuple(self.selected_region)  # type:ignore
+        else:
+            if len(self.project.selected_series) != 0:
+                emission_data_wl_region = self.project.selected_series[
+                    0
+                ].averaged.x_limits
+            else:
+                emission_data_wl_region = (200, 2000)
 
-        emission_data_wl_region = self.project.selected_series[0].averaged.x_limits
         emission_data = [
             (
                 symbol,
                 element_plot_data(
                     get_emission_data(
-                        symbol, emission_data_wl_region, max_ionization_level=1
+                        symbol,
+                        emission_data_wl_region,
+                        max_ionization_level=self.settings.emission_lines_max_ionization_level.value,
+                        intensity_threshold=self.settings.emission_lines_intensity_threshold.value,
                     )
                 ),
             )
@@ -2087,28 +2167,74 @@ class UI:
             if symbol is not None
         ]
 
-        with dpg.theme() as plot_theme:
-            with dpg.theme_component(dpg.mvLineSeries):
-                dpg.add_theme_style(
-                    dpg.mvPlotStyleVar_LineWeight, 1, category=dpg.mvThemeCat_Plots
-                )
+        with dpg.mutex():
+            if emission_plots:
+                for plot in emission_plots:
+                    if dpg.get_item_user_data(plot) == "emission_plot":
+                        dpg.delete_item(plot)
 
-        for element_symbol, data in emission_data:
-            y_multiplier = np.max(
-                [np.max(s.averaged.y) for s in self.project.selected_series]
-            )
-            x, y = data.T
-            y = y / np.nanmax(y) * y_multiplier
-            y = y.tolist()
-            x = x.tolist()
-            dpg.add_line_series(
-                x,
-                y,
-                parent="libs_y_axis",
-                label=element_symbol,
-                user_data="emission_plot",
-            )
-            dpg.bind_item_theme(dpg.last_item(), plot_theme)
+            for element_symbol, data in emission_data:
+                with dpg.theme() as plot_theme:
+                    with dpg.theme_component(dpg.mvLineSeries):
+                        dpg.add_theme_style(
+                            dpg.mvPlotStyleVar_LineWeight,
+                            1,
+                            category=dpg.mvThemeCat_Plots,
+                        )
+                        dpg.add_theme_color(
+                            dpg.mvPlotCol_Line,
+                            ColorHash(
+                                element_symbol,
+                                saturation=(1.0, 0.7, 0.9, 0.8),
+                            ).rgb,
+                            category=dpg.mvThemeCat_Plots,
+                        )
+
+                x, y = data.T
+
+                if len(self.project.selected_series) == 0:
+                    y_multiplier = 1.0
+                else:
+                    if self.settings.emission_lines_fit_intensity.value:
+                        try:
+                            emission_max_x = x[np.nanargmax(y)]
+
+                            series_max_avg = np.mean(
+                                [
+                                    s.averaged.y[
+                                        s.averaged.x
+                                        == nearest(s.averaged.x, emission_max_x)
+                                    ]
+                                    for s in self.project.selected_series
+                                ]
+                            )
+                            y_multiplier = series_max_avg
+                        except ValueError:
+                            y_multiplier = np.max(
+                                [
+                                    np.max(s.averaged.y)
+                                    for s in self.project.selected_series
+                                ]
+                            )
+                    else:
+                        y_multiplier = np.max(
+                            [np.max(s.averaged.y) for s in self.project.selected_series]
+                        )
+
+                try:
+                    y = y / np.nanmax(y) * y_multiplier
+                    y = y.tolist()
+                    x = x.tolist()
+                    dpg.add_line_series(
+                        x,
+                        y,
+                        parent="libs_y_axis",
+                        label=element_symbol,
+                        user_data="emission_plot",
+                    )
+                    dpg.bind_item_theme(dpg.last_item(), plot_theme)
+                except ValueError:
+                    continue
 
     def change_baseline_method(self):
         if self.settings.baseline_removal_method.value == BaselineRemoval.NONE:

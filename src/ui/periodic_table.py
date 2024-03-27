@@ -288,9 +288,7 @@ class PeriodicTable:
                     category=dpg.mvThemeCat_Core,
                 )
 
-        with dpg.window(
-            autosize=True, tag="periodic_table", label="Periodic table", show=False
-        ):
+        with dpg.window(tag="periodic_table", label="Periodic table", show=False, no_resize=True, height=400):
             with dpg.table(
                 width=-1,
                 header_row=False,
@@ -299,6 +297,9 @@ class PeriodicTable:
                 scrollY=False,
                 precise_widths=True,
                 policy=dpg.mvTable_SizingFixedFit,
+                borders_outerH=True,
+                borders_outerV=True,
+                pad_outerX=True,
             ):
                 dpg.add_table_column(
                     no_sort=True,
@@ -316,6 +317,9 @@ class PeriodicTable:
                         no_header_width=True,
                         no_resize=True,
                     )
+                with dpg.table_row(label="row_separator"):
+                    for _ in range(18):
+                        dpg.add_group()
                 with dpg.table_row(label="row_1"):
                     dpg.add_selectable(
                         label="H ",
@@ -1099,6 +1103,10 @@ class PeriodicTable:
                         callback=lambda s, d: self.element_selected(s, d),
                     )
                     dpg.add_group()
+
+                with dpg.table_row(label="row_separator"):
+                    for _ in range(18):
+                        dpg.add_group()
 
         dpg.bind_item_theme("periodic_table", selectable_theme)
 

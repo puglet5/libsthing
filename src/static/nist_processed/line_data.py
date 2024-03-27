@@ -36,7 +36,12 @@ EMISSION_LINE_DATA: pd.DataFrame = csv.read_csv(
 ).to_pandas()
 
 
-def get_emission_data(symbol: str, wl_window: Window, max_ionization_level: int = 3):
+def get_emission_data(
+    symbol: str,
+    wl_window: Window,
+    max_ionization_level: int = 3,
+    intensity_threshold: float = 0.05,
+):
     emission_data = (
         EMISSION_LINE_DATA.groupby("element")
         .get_group(symbol)
@@ -46,7 +51,11 @@ def get_emission_data(symbol: str, wl_window: Window, max_ionization_level: int 
 
     emission_data = emission_data[emission_data["wavelength"].between(*wl_window)]
     emission_data = emission_data[emission_data["level"].le(max_ionization_level)]
-    
+    max_intensity = emission_data["intensity"].max()
+    emission_data = emission_data[
+        emission_data["intensity"].ge(intensity_threshold * max_intensity)
+    ]
+
     return emission_data
 
 

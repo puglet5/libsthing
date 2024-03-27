@@ -18,6 +18,7 @@ attrs = "*"
 natsort = "*"
 pybaselines = "*"
 pathos = "*"
+colorhash = "*"
 
 [dev-packages]
 black = "*"
