@@ -23,7 +23,6 @@ class History:
         self.backward.clear()
 
     def undo_last(self):
-
         if not self.can_undo():
             return
 
